@@ -1,0 +1,217 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(SolSystemSim
+    VERSION 0.1.0
+    DESCRIPTION "Real-time Solar System simulator with a telemetry HUD"
+    LANGUAGES C CXX)
+
+if(NOT WIN32)
+    message(FATAL_ERROR "SolSystemSim targets Windows 10/11 x64 only.")
+endif()
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "SolSystemSim requires a 64-bit (x64) toolchain. "
+                        "Use a 'x64 Native Tools' prompt or the '-A x64' generator platform.")
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+# Single-config generators (Ninja, MinGW Makefiles) default to Release.
+get_property(SOLSIM_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT SOLSIM_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(SOLSIM_BUILD_TESTS "Build the simulation self-tests (sim_tests)" ON)
+
+include(cmake/Dependencies.cmake)
+add_subdirectory(external/glad)
+
+# Warning policy for first-party targets only. Third-party targets are silenced
+# in cmake/Dependencies.cmake, and their headers are included with <angle brackets>
+# so /external:anglebrackets keeps them out of our /W4 output.
+function(solsim_set_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /W4 /permissive- /utf-8
+            /external:anglebrackets /external:W0)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Simulation library: pure C++17, no OpenGL / ImGui / GLFW / GLM.
+# ---------------------------------------------------------------------------
+add_library(solsim_sim STATIC
+    src/sim/Vec3.h
+    src/sim/Constants.h
+    src/sim/OrbitalElements.h
+    src/sim/Body.h
+    src/sim/BodyTable.h
+    src/sim/BodyTable.cpp
+    src/sim/KeplerSolver.h
+    src/sim/KeplerSolver.cpp
+    src/sim/SolarSystem.h
+    src/sim/SolarSystem.cpp
+    src/sim/SimClock.h
+    src/sim/SimClock.cpp
+    src/sim/OrbitProbe.h
+    src/sim/OrbitProbe.cpp
+    src/sim/EventDetector.h
+    src/sim/EventDetector.cpp)
+target_include_directories(solsim_sim PUBLIC src)
+solsim_set_warnings(solsim_sim)
+set_target_properties(solsim_sim PROPERTIES FOLDER "solsim")
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+find_package(OpenGL REQUIRED)
+
+set(SOLSIM_APP_SOURCES
+    src/main.cpp
+    src/app/Application.h
+    src/app/Application.cpp
+    src/app/Window.h
+    src/app/Window.cpp
+    src/app/Input.h
+    src/app/Input.cpp
+    src/app/Paths.h
+    src/app/Paths.cpp
+    src/app/Log.h
+    src/app/Log.cpp
+    src/app/Screenshot.h
+    src/app/Screenshot.cpp
+    src/render/GlColor.h
+    src/render/Shader.h
+    src/render/Shader.cpp
+    src/render/SphereMesh.h
+    src/render/SphereMesh.cpp
+    src/render/OrbitRenderer.h
+    src/render/OrbitRenderer.cpp
+    src/render/Camera.h
+    src/render/Camera.cpp
+    src/render/ScaleMapper.h
+    src/render/ScaleMapper.cpp
+    src/render/Picking.h
+    src/render/Picking.cpp
+    src/render/Starfield.h
+    src/render/Starfield.cpp
+    src/render/EclipticGrid.h
+    src/render/EclipticGrid.cpp
+    src/render/PointCloud.h
+    src/render/PointCloud.cpp
+    src/render/LineMesh.h
+    src/render/LineMesh.cpp
+    src/render/SceneRenderer.h
+    src/render/SceneRenderer.cpp
+    src/render/PostProcess.h
+    src/render/PostProcess.cpp
+    src/render/ReactorStructure.h
+    src/render/ReactorStructure.cpp
+    src/style/SceneStyle.h
+    src/style/Palette.h
+    src/hud/Theme.h
+    src/hud/Theme.cpp
+    src/hud/HudState.h
+    src/hud/HudTheme.h
+    src/hud/HudTheme.cpp
+    src/hud/StatusStrips.cpp
+    src/hud/HudLayout.h
+    src/hud/HudLayout.cpp
+    src/hud/Panels.h
+    src/hud/TitleBar.cpp
+    src/hud/Controls.cpp
+    src/hud/PlanetPanel.cpp
+    src/hud/DataGrid.cpp
+    src/hud/HistoryPlot.h
+    src/hud/HistoryPlot.cpp
+    src/hud/LogPanel.h
+    src/hud/LogPanel.cpp
+    src/hud/SceneOverlay.h
+    src/hud/SceneOverlay.cpp)
+
+if(MSVC)
+    # Declares PerMonitorV2 DPI awareness; merged into the exe by the linker.
+    list(APPEND SOLSIM_APP_SOURCES src/app/solsim.manifest)
+endif()
+
+add_executable(solsim ${SOLSIM_APP_SOURCES})
+target_link_libraries(solsim PRIVATE
+    solsim_sim
+    glad
+    imgui
+    implot
+    glfw
+    glm::glm
+    OpenGL::GL)
+target_compile_definitions(solsim PRIVATE
+    GLFW_INCLUDE_NONE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN)
+solsim_set_warnings(solsim)
+set_target_properties(solsim PROPERTIES
+    FOLDER "solsim"
+    OUTPUT_NAME "SolSystemSim"
+    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:solsim>")
+
+# Debug keeps the console for logging; every other config uses the WIN32 subsystem.
+# main() stays the entry point in both cases.
+if(MSVC)
+    target_link_options(solsim PRIVATE
+        "$<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS;/ENTRY:mainCRTStartup>")
+else()
+    target_link_options(solsim PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-mwindows>")
+endif()
+
+# MinGW-w64 (GCC): link the C++ runtime statically so SolSystemSim.exe runs from
+# Explorer without libstdc++/libgcc/winpthread DLLs on PATH. The .manifest is
+# MSVC-only; GLFW 3.4 enables per-monitor-v2 DPI awareness itself at runtime.
+if(MINGW)
+    target_link_options(solsim PRIVATE -static)
+endif()
+
+# Copy assets/ next to the executable so it runs from VS, the command line and Explorer.
+add_custom_command(TARGET solsim POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+            "$<TARGET_FILE_DIR:solsim>/assets"
+    COMMENT "Copying assets next to SolSystemSim.exe"
+    VERBATIM)
+
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT solsim)
+
+# ---------------------------------------------------------------------------
+# Tests (simulation only; no window needed)
+# ---------------------------------------------------------------------------
+if(SOLSIM_BUILD_TESTS)
+    enable_testing()
+    add_executable(sim_tests tests/sim_tests.cpp)
+    target_link_libraries(sim_tests PRIVATE solsim_sim)
+    if(MINGW)
+        target_link_options(sim_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(sim_tests)
+    set_target_properties(sim_tests PROPERTIES FOLDER "solsim")
+    add_test(NAME sim_tests COMMAND sim_tests)
+
+    # Render geometry (scale mapping, picking, generators): GLM only, no GPU.
+    add_executable(render_tests
+        tests/render_tests.cpp
+        src/render/Camera.cpp
+        src/render/ScaleMapper.cpp
+        src/render/Picking.cpp
+        src/render/Starfield.cpp
+        src/render/EclipticGrid.cpp
+        src/render/ReactorStructure.cpp)
+    target_link_libraries(render_tests PRIVATE solsim_sim glm::glm)
+    if(MINGW)
+        target_link_options(render_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(render_tests)
+    set_target_properties(render_tests PROPERTIES FOLDER "solsim")
+    add_test(NAME render_tests COMMAND render_tests)
+endif()

@@ -1,0 +1,30 @@
+#pragma once
+
+#include "render/EclipticGrid.h"
+
+#include <glad/gl.h>
+
+#include <vector>
+
+namespace render {
+
+// GPU buffer of a GL_LINES list with per-vertex opacity (LineVertex),
+// drawn with line.vert/frag. Used for the ecliptic grid.
+class LineMesh {
+public:
+    LineMesh() = default;
+    ~LineMesh();
+    LineMesh(const LineMesh&) = delete;
+    LineMesh& operator=(const LineMesh&) = delete;
+
+    void create(const std::vector<LineVertex>& vertices);
+    void destroy();
+    void draw() const;
+
+private:
+    GLuint vao_ = 0;
+    GLuint vbo_ = 0;
+    GLsizei count_ = 0;
+};
+
+} // namespace render

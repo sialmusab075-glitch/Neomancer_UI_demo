@@ -347,7 +347,7 @@ page size, and memory for the master vector and each index.
 | 5 | DSA structures + unit tests | **done** (133 checks in `neo_dsa_tests`; study notes in `docs/DSA_NOTES.md`) |
 | 6 | Query engine + planner + oracle tests | **done** (298 checks in `neo_query_tests`; 12,200 random queries, 0 mismatches) |
 | 7 | `neo_bench` + CSV + results summary | not started |
-| 8 | UI hook | not started |
+| 8 | UI hook | Earth view **done** (section 14); solar-view NEOS layer in progress (section 15) |
 
 ### Stage 1 — decisions recorded
 
@@ -868,3 +868,100 @@ index and comparing against the record would cut both maps to a few hundred KB.
 skipping their top bucket, objects with no matching approach being kept, year buckets
 reading one year short, and one range boundary made exclusive -- and the suite failed
 each time (3 to 16 failing checks), then passed again once the engine was restored.
+
+## 14. Earth view (implemented)
+
+Replaces the "UI hook" of section 9. Entered with `E` or the EARTH VIEW button while the
+Earth is the target; `ESC` / SOLAR VIEW leaves. The solar view is untouched.
+
+### Layering
+
+```
+QueryEngine::run  ->  NeoService (worker thread, latest-wins)  ->  NeoOutcome{QueryResult, FlybyScene}
+                                                                        |
+                       HUD panels + renderer read it, never write it  <-'
+```
+
+The UI never parses JSON, never uses SQL and never touches the network: `NeoService`
+loads `neo.db` on its worker (`data/neo.db` found by walking up from the executable, or
+`SOLSIM_NEO_DB`) and only ever calls `QueryEngine::run`. The mapping from a result to a
+scene is `neo/sim/EarthFlybys` -- pure C++, no GL, no ImGui -- and is what the tests pin down.
+
+### Real versus schematic (stated on screen too)
+
+| REAL, taken from the data | SCHEMATIC, chosen for legibility |
+|---|---|
+| time of closest approach = the CAD Julian Date, exactly, on the sim clock | approach **direction** and path orientation: a hash of the designation and approach ordinal (CAD gives no usable geometry) |
+| closest distance (monotonically mapped, see below) | the **log radial scale** |
+| along-track speed proportional to the real `v_rel` | straight-line path instead of the hyperbola |
+| marker size from the diameter; hollow when it is only estimated from H | one declared **time scale**: 0.20 render units per day per km/s of `v_rel`; path half-length 14 units |
+| PHA = accent colour | |
+
+**Radial scale** (R = Earth's equatorial radius, 6378.137 km = 1 render unit):
+`r = d/R` inside the planet, `r = 1 + 3.2 * log10(d/R)` outside. Strictly increasing,
+continuous at the surface and invertible, so ordering by distance is ordering by radius.
+Reference rings: GEO 3.6, 1 LD 6.7, 5 LD 8.9, 0.05 AU 10.8 units. The scale is printed in
+the viewport's top-right corner and in the EARTH VIEW panel.
+
+**Position at time t** = `closest + direction * speed * (t - t_ca)`, visible while
+`|along-track| <= 14`. All of it in doubles on the CPU, shared by drawing, picking and the overlay.
+
+### Scene
+
+- The Earth is fixed at the centre and only rotates: 23.44 deg tilt, one turn per 20 s by
+  default, independent of the sim clock (speed slider + pause). NASA Blue Marble texture
+  (2048x1024) loaded with stb_image; a procedural lat/long grid if the file is missing.
+  Lighting uses a fixed Sun direction and does not spin with the texture; soft atmosphere rim.
+- Paths are built **once per result** (`setScene`), ten segments each, and drawn as native
+  one-pixel lines; only the selected and hovered paths are widened by the geometry shader.
+  Markers stream through one dynamic VBO, one draw call. Faintness scales with the flyby
+  count so a thousand additive lines read as a field.
+- Entering the view sets the clock to +1 d/s and jumps it to the selected approach; leaving
+  restores the date, rate, pause state and tracking that were saved, and resets the solar
+  event detector so the log does not report every event "between" the two dates.
+- Transition: ~0.8 s. The solar camera flies to the Earth while the view fades to the
+  background colour; the world is swapped at the dark midpoint; the Earth camera flies in.
+  (Neither camera is modified: the solar one is copied.)
+
+### HUD
+
+NEO FILTER (RUN + result count + one-line EXPLAIN on top, then date window, max distance in
+LD or AU, min/max diameter with diameter mode, v_rel range, PHA only, grazing only, sort,
+top-K), EARTH VIEW (rotation, prev/next result, next approach, rings, scale legend),
+NEO RESULTS (clickable table: select + jump the clock to the approach), and TARGET ·
+OBSERVATION for the selected asteroid (designation, D measured/estimated, H, PHA, date,
+nominal/min/max distance in LD and km, v_rel, v_inf). The panels dock into the nodes of
+the panels they replace; an `imgui.ini` from before the Earth view still docks them
+(`FindWindowSettingsByID` on the sibling panel).
+
+Each result is an object *with its matching approaches*, so 50 objects can be 116 flybys.
+The flyby capped at 1,000 (`kMaxFlybys`); the panel says how many were not drawn.
+
+### Performance (Intel UHD, 1920x1094 window, 4x MSAA HDR + bloom)
+
+| Case | uncapped fps | frame time |
+|---|---|---|
+| solar view | 406 | 2.5 ms |
+| Earth view, empty result | 441 | 2.3 ms |
+| Earth view, 116 flybys | ~350 | 2.8 ms |
+| Earth view, 1,000 flybys, widened paths (first version) | 130 | 7.7 ms |
+| Earth view, 1,000 flybys, native 1 px paths | 179 | 5.6 ms |
+
+The cost of the first version was fill rate, not vertices: cutting 48 segments to 10 changed
+nothing, and removing the paths (not the markers) took the scene call from 4.3 ms to 0.45 ms.
+With vsync the view holds 60 fps at 1,000 flybys.
+
+### Dev hooks (environment variables)
+
+`SOLSIM_EARTH=1` (start in the view; screenshots wait for the first result),
+`SOLSIM_NEO_TOPK`, `SOLSIM_NEO_MAXLD`, `SOLSIM_NEO_PHA=1`, `SOLSIM_NEO_FROM/TO`,
+`SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i|any`, `SOLSIM_EARTH_ENTER=n` /
+`SOLSIM_EARTH_LEAVE=n` (frame numbers), `SOLSIM_NEO_DB`, `SOLSIM_VSYNC=0`.
+
+### Not done / known gaps
+
+- Real cursor hover and click picking, the results-row click, prev/next and the spin
+  controls were driven only through the same code paths by hooks, not by hand.
+- `layoutFlybys` / `pickFlyby` live in the GL renderer file and have no unit test.
+- "Show the selected asteroid's orbit in the solar view" was skipped as too costly for
+  the first version (see section 15).

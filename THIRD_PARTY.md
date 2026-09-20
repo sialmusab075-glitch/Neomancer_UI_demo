@@ -11,6 +11,7 @@
 | `khrplatform.h` | from the glad2 2.0.8 wheel | MIT-style Khronos licence (in the file header) | committed in `external/glad/include/KHR/` |
 | nlohmann/json (single header) | 3.12.0 | MIT (`external/json/LICENSE.MIT`) | committed in `external/json/nlohmann/json.hpp` |
 | SQLite (amalgamation) | 3.53.4 (`3530400`, 2026) | public domain (dedication in the file header) | committed in `external/sqlite/sqlite3.c`, `sqlite3.h` |
+| stb_image (single header) | 2.30 (commit `013ac3b`) | MIT / public domain (dual, in the file footer) | committed in `external/stb/stb_image.h`; only the JPEG and PNG decoders are compiled (`STBI_ONLY_JPEG`, `STBI_ONLY_PNG`) |
 | WinHTTP | Windows 10/11 SDK | Windows SDK licence (system component) | linked from the system (`winhttp`); no source vendored |
 
 ## Vendored downloads (verified)
@@ -22,6 +23,9 @@ Downloaded once and committed; the build never fetches them.
 | `external/json/nlohmann/json.hpp` (953,436 B) | `https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp` | SHA-256 `aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63` (release notes) |
 | `external/json/LICENSE.MIT` | `https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT` | — |
 | `external/sqlite/sqlite3.c`, `sqlite3.h` | `https://sqlite.org/2026/sqlite-amalgamation-3530400.zip` (2,946,650 B) | SHA3-256 `628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e` (sqlite.org download page) |
+
+| `external/stb/stb_image.h` | `https://raw.githubusercontent.com/nothings/stb/013ac3beddff3dbffafd5177e7972067cd2b5083/stb_image.h` | SHA-256 `594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3` (computed on download; the repository publishes no hashes) |
+| `assets/textures/earth_blue_marble_2048.jpg` (266,599 B, 2048x1024) | NASA Visible Earth, *The Blue Marble: Land Surface, Ocean Color and Sea Ice*, record 57730, `land_ocean_ice_2048.jpg` | SHA-256 `d4dc80a6...e6f1e` (computed on download). NASA imagery is not copyrighted (NASA media usage guidelines); credit: NASA Earth Observatory / Visible Earth. The exact credit line was not re-read from the source page. |
 
 SQLite is compiled from the amalgamation by `cmake/Dependencies.cmake` with
 `SQLITE_THREADSAFE=2`, `SQLITE_DQS=0`, `SQLITE_OMIT_LOAD_EXTENSION`,

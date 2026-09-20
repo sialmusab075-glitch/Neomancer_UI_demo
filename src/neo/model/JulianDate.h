@@ -25,6 +25,12 @@ std::string formatJulianDate(double jdTdb);
 // "YYYY-MM-DD" (TDB), for table columns that have no room for a time.
 std::string formatJulianDay(double jdTdb);
 
+// Current UTC as "YYYY-MM-DDTHH:MMZ", for cache metadata and report headers.
+// Built from the system clock through the Julian Date path rather than
+// std::gmtime, which has no portable thread-safe form (and is deprecated under
+// MSVC). The ~1 minute TT/TDB-UTC offset is irrelevant for a timestamp.
+std::string utcNowIso();
+
 // Julian Date for a calendar date at 00:00 TDB. Used for CLI date options
 // (--date-min / --date-max), not for parsing API payloads: those carry a JD.
 // Returns false when the string is not exactly "YYYY-MM-DD" or the date is invalid.

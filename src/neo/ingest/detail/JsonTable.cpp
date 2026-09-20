@@ -82,6 +82,11 @@ ParseStatus JsonTable::parse(const std::string& text, const char* expectedVersio
     if (doc_.contains("count") && toDouble(doc_["count"], count) && count >= 0.0) {
         declaredCount_ = static_cast<std::size_t>(count);
     }
+    report.declaredCount = declaredCount_;
+    double total = 0.0;
+    if (doc_.contains("total") && toDouble(doc_["total"], total) && total >= 0.0) {
+        report.declaredTotal = static_cast<std::size_t>(total);
+    }
 
     const auto fields = doc_.find("fields");
     if (fields == doc_.end()) {

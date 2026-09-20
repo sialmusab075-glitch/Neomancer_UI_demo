@@ -200,23 +200,75 @@ perturbations, non-gravitational forces and close-encounter deflection: the
 drawn orbit is a visual aid, not an ephemeris. Objects with `e >= 1` are stored
 but flagged unsupported for propagation (the Newton solver assumes `0 <= e < 1`).
 
-## 4. Ingestion
+## 4. Ingestion (stage 3, implemented)
 
-`tools/neo_ingest`, sequential and polite:
+`tools/neo_ingest` is a command-line tool; the UI never runs it. Pipeline:
+`IHttpClient` -> `Fetcher` (politeness, retry, cache) -> `Ingestor` (paging,
+windows, progress) -> parsers -> `Dataset` -> `IngestReport`.
 
-- SBDB: `sb-group=neo`, explicit field list, paged with `limit` / `limit-from`.
-- CAD: explicit `date-min`, `date-max`, `dist-max`, `diameter=true`,
-  `fullname=true`, paged the same way.
-- **v1 defaults: dates 1950-01-01 .. 2150-01-01, `dist-max` 0.05 AU.** The wider
-  1900-01-01 .. 2200-01-01 and 0.2 AU stay available as flags.
-- A count-first request runs before downloading; above a row threshold the tool
-  stops unless `--yes` is passed.
-- Every raw response is cached on disk keyed by its request, so re-runs parse
-  from the cache instead of re-downloading.
-- `signature.version` is checked in every response; an unknown version fails loudly.
-- A short delay between pages.
-- Validation report: per-field null counts, row counts, unmatched CAD
-  designations, and rejected rows with reasons.
+### Politeness
+
+- Strictly sequential requests, at least **1 s apart** (`--min-interval`).
+- A `User-Agent` naming the project, and 15 s connect / 60 s receive timeouts.
+- **Retries only on 5xx and timeouts**, at most 5 attempts (`--max-attempts`),
+  with exponential backoff (1, 2, 4, 8 s, capped at 30 s) plus up to 50% seeded
+  jitter. A 4xx is the request's own fault and is never retried.
+- A page that exhausts its attempts fails the run with the URL in the message.
+
+### Cache and offline
+
+Every raw response is stored as `<fnv1a64(url)>.json` plus a
+`.meta.json` holding the exact URL, status, byte count and fetch time. The URL
+is verified on load, so a hand-edited or colliding entry is ignored rather than
+served as the wrong answer. `--offline` runs entirely from the cache (a miss is
+an error); `--refresh` ignores what is cached and downloads again.
+
+### Resume
+
+A progress file (`data/ingest_progress.json`) records the next SBDB record
+offset and the next CAD window start, keyed by a signature of the run
+parameters; a file from different parameters is ignored. Re-running after an
+interruption replays the completed pages from the cache (no network) and
+continues from the mark. In `--refresh` mode the mark also means "this run
+already refreshed these pages", so a resumed refresh does not download them
+twice.
+
+### SBDB
+
+`sb-group=neo`, the explicit field list (including `epoch` and `n`),
+`full-prec=1`, `sort=spkid` for deterministic paging, and `limit` /
+`limit-from`. A count-first request (no `fields`) prints the total before any
+bulk download.
+
+### CAD
+
+Defaults `1950-01-01 .. 2150-01-01`, `dist-max=0.05`, `neo=true`,
+`diameter=true`, `fullname=true`. The wider 1900..2200 at 0.2 AU is available
+through the flags.
+
+**Time windows instead of offset paging.** CAD documents `limit-from` as
+1-based while SBDB documents it as 0-based, so offset paging there is a
+correctness risk. Instead the range is cut into `--window-years` windows
+(default 5) and each window is fetched in one request with `limit`. The
+response reports `total`; when `total` exceeds the rows returned, the window is
+too wide and is **split in half** and retried. The API itself therefore decides
+the granularity, and no offset arithmetic is involved.
+
+Window edges are inclusive at both ends, so a row landing exactly on a boundary
+can come back from two neighbouring windows. Exact repeats (same designation,
+same instant) are dropped once, and counted in the report.
+
+A count-first `total-only=true` request runs before any window; above
+`--threshold` rows (default 500,000) the run stops unless `--yes` is given.
+
+### Report
+
+`data/ingest_report.json` and `data/ingest_report.txt`: run mode and timing,
+the request parameters, per-API signature versions, rows seen/accepted/rejected
+with reasons, null counts per field, derived distance ranges, window and split
+counts, duplicates dropped, the full join result with unmatched designations,
+dataset composition, and fetch statistics (requests, cache hits, retries,
+failures, bytes, network time, polite waiting time).
 
 ## 5. DSA layer
 
@@ -284,7 +336,7 @@ page size, and memory for the master vector and each index.
 |---|---|---|
 | 1 | Plan + dependencies + licences | **done** |
 | 2 | Model + JSON parsing from fixtures + tests | **done** (97 checks in `neo_tests`) |
-| 3 | `neo_ingest`: real download, paging, cache, validation report | not started |
+| 3 | `neo_ingest`: real download, paging, cache, validation report | **done** (85 checks in `neo_ingest_tests`; one real run recorded below) |
 | 4 | SQLite schema + save/load + tests | not started |
 | 5 | DSA structures + unit tests | not started |
 | 6 | Query engine + planner + oracle tests | not started |
@@ -336,16 +388,26 @@ page size, and memory for the master vector and each index.
 7. `Dataset::find()` currently wraps `std::unordered_map`. Stage 5 swaps in
    `neo::HashMap` behind the same signature; callers only ever see indices.
 
-### JPL API behaviour found while building the fixtures
+### JPL API behaviour found against the live API
 
 - A **top-level `"OR"`** in `sb-cdata` returns HTTP 502. The documented nested
   form, `{"AND":[{"OR":[...]}]}`, works.
 - `EQ` **rejects spaces** in an argument, so designations such as `2020 AN3`
   must be matched with `RE` (`pdes|RE|^2020.AN3$`).
 - `spkid` is a **JSON number**; every other SBDB value is a string or null.
-- Broad filters (`H|ND` over the whole NEO group) and even some ordinary window
-  queries return **intermittent 502s**. The ingest tool must retry with backoff
-  and cache successful responses.
+- Broad filters (`H|ND` over the whole NEO group) and even ordinary window
+  queries return **intermittent 502s**. The real ingest run needed 29 retries
+  for 69 requests, and one window exhausted 5 attempts before succeeding on a
+  later run: retry with backoff plus the response cache is not optional.
+- **`total-only=true` puts the number in `total` and sets `count` to 0**, unlike
+  an ordinary response where `count` is the row count. Reading `count` there
+  silently reports zero rows (found and fixed during the first real run).
+- SBDB's `sb-group=neo` **excludes hyperbolic objects**: the live run returned 0
+  objects with `e >= 1`. 1I/'Oumuamua is only in the fixture because it was
+  requested by designation. The propagation guard still matters for comets and
+  for any future widening of the query.
+- CAD `neo=true` selects exactly the population `sb-group=neo` returns: the real
+  run joined **42,819 of 42,819 rows with zero unmatched**.
 
 ### Fixtures (`tests/fixtures/`, each with a `.meta.json`)
 
@@ -355,3 +417,44 @@ page size, and memory for the master vector and each index.
 | `cad_pha_window.json` | 22 approaches | a realistic one-year PHA window; 3 designations deliberately absent from the SBDB fixture |
 | `cad_apophis.json` | 28 approaches | one object with many encounters, including 2029-04-13 at 0.000254 au |
 | `sbdb_bad_signature.json` | 2 objects | synthetic: `signature.version` changed to `9.9`, must be refused |
+
+### Stage 3 — decisions recorded
+
+1. **Networking is isolated.** `IHttpClient` is the only door to the network and
+   `WinHttpClient` lives in its own target (`solsim_neo_net`) that only
+   `tools/neo_ingest` links. The tests and the application link `solsim_neo`,
+   which contains no HTTP implementation at all, so no test can reach the
+   network even by mistake.
+2. **CAD is paged by time, not by offset** (see above): the window splits itself
+   in half whenever the response says it carries more rows than it returned.
+3. **Retry only what deserves it:** 5xx and timeouts, never 4xx.
+4. **`--skip-sbdb` keeps the dataset's existing objects.** Replacing them with
+   an empty vector would make every CAD row unmatched; this is what lets stage 4
+   load objects from `neo.db` and fetch only new approaches. (Caught by the
+   window-split test.)
+5. The `Fetcher`'s sleep is injectable, so tests exercise the real backoff logic
+   without spending wall-clock time.
+
+### Stage 3 — the real run (2026-09-20)
+
+`neo_ingest --data-dir data`, defaults (1950-01-01 .. 2150-01-01, 0.05 AU):
+
+| Measure | Value |
+|---|---|
+| SBDB objects | 42,666 reported, 42,666 accepted, 0 rejected (9 pages) |
+| CAD approaches | 42,819 reported, 42,819 accepted, 0 rejected (41 windows, 1 split) |
+| Join | 42,819 matched, **0 unmatched**, 19,655 objects with approaches |
+| Objects with no approach in the window | 23,011 |
+| Diameters | 1,264 measured, 41,213 H-estimated, 189 with neither |
+| `e >= 1` | 0 (the NEO group excludes hyperbolic objects) |
+| Null `v_inf` | 23 rows — the reason `vInfinityKms` is optional |
+| Null `H` | 210 objects |
+| Duplicate window-edge rows | 0 |
+| Fetch | 69 requests, 13 cache hits, 29 retries, 0 failures |
+| Transfer | 9.1 MB downloaded + 12.7 MB from cache |
+| Time | 172 s total (74 s network, 96 s polite waiting) |
+
+The first attempt failed on the 1960–1965 window after 5 attempts of HTTP 502.
+Re-running with `--max-attempts 8` resumed from the progress mark, replayed the
+completed pages from the cache and finished — which is the resume path working
+on the live API rather than only in a test.

@@ -2,6 +2,7 @@
 
 #include "sim/SimClock.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -46,6 +47,17 @@ std::string formatJulianDay(double jdTdb) {
     const sim::CalendarDate d = sim::calendarFromJulianDate(jdTdb);
     char buf[16];
     std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", d.year, d.month, d.day);
+    return buf;
+}
+
+std::string utcNowIso() {
+    // Unix epoch 1970-01-01T00:00Z is JD 2440587.5.
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const double seconds = std::chrono::duration<double>(now).count();
+    const double jd = 2440587.5 + seconds / 86400.0;
+    const sim::CalendarDate d = sim::calendarFromJulianDate(jd);
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02dZ", d.year, d.month, d.day, d.hour, d.minute);
     return buf;
 }
 

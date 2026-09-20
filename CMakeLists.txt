@@ -87,11 +87,41 @@ add_library(solsim_neo STATIC
     src/neo/ingest/CadParser.h
     src/neo/ingest/CadParser.cpp
     src/neo/ingest/detail/JsonTable.h
-    src/neo/ingest/detail/JsonTable.cpp)
+    src/neo/ingest/detail/JsonTable.cpp
+    src/neo/ingest/HttpClient.h
+    src/neo/ingest/ResponseCache.h
+    src/neo/ingest/ResponseCache.cpp
+    src/neo/ingest/Fetcher.h
+    src/neo/ingest/Fetcher.cpp
+    src/neo/ingest/Ingestor.h
+    src/neo/ingest/Ingestor.cpp
+    src/neo/ingest/IngestReport.cpp)
 target_include_directories(solsim_neo PUBLIC src)
 target_link_libraries(solsim_neo PUBLIC solsim_sim PRIVATE nlohmann_json)
 solsim_set_warnings(solsim_neo)
 set_target_properties(solsim_neo PROPERTIES FOLDER "neo")
+
+# Networking, kept in its own target so only the CLI can reach the network:
+# tests and the application link solsim_neo and never see an IHttpClient
+# implementation. WinHTTP is a Windows system library, not a dependency.
+add_library(solsim_neo_net STATIC
+    src/neo/net/WinHttpClient.h
+    src/neo/net/WinHttpClient.cpp)
+target_link_libraries(solsim_neo_net PUBLIC solsim_neo PRIVATE winhttp)
+target_compile_definitions(solsim_neo_net PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+solsim_set_warnings(solsim_neo_net)
+set_target_properties(solsim_neo_net PROPERTIES FOLDER "neo")
+
+# ---------------------------------------------------------------------------
+# Command-line tools
+# ---------------------------------------------------------------------------
+add_executable(neo_ingest tools/neo_ingest/main.cpp)
+target_link_libraries(neo_ingest PRIVATE solsim_neo_net)
+if(MINGW)
+    target_link_options(neo_ingest PRIVATE -static)
+endif()
+solsim_set_warnings(neo_ingest)
+set_target_properties(neo_ingest PROPERTIES FOLDER "neo")
 
 # ---------------------------------------------------------------------------
 # Application
@@ -255,4 +285,17 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_tests)
     set_target_properties(neo_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_tests COMMAND neo_tests)
+
+    # The ingest pipeline (cache, retry/backoff, paging, windows, resume) driven
+    # by a fake IHttpClient that serves the fixtures. Still no network.
+    add_executable(neo_ingest_tests tests/neo_ingest_tests.cpp)
+    target_link_libraries(neo_ingest_tests PRIVATE solsim_neo)
+    target_compile_definitions(neo_ingest_tests PRIVATE
+        NEO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    if(MINGW)
+        target_link_options(neo_ingest_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_ingest_tests)
+    set_target_properties(neo_ingest_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_ingest_tests COMMAND neo_ingest_tests)
 endif()

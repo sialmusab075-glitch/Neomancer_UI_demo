@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,12 @@ struct RejectedRow {
 struct ValidationReport {
     std::string signatureSource;
     std::string signatureVersion;
+
+    // What the response said about itself: "count" is the rows it carries,
+    // "total" (CAD, only when a limit was given) is how many exist in total.
+    // Paging compares the two instead of re-parsing the payload.
+    std::size_t declaredCount = 0;
+    std::optional<std::size_t> declaredTotal;
 
     std::size_t rowsSeen = 0;
     std::size_t rowsAccepted = 0;

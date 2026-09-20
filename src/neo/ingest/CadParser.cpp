@@ -62,13 +62,23 @@ ParseStatus parseCadApproaches(const std::string& json, std::vector<ParsedApproa
         CloseApproach& a = parsed.approach;
         a.jdTdb = *jd;
         a.distanceAU = dist.value_or(0.0);
-        // The 3-sigma bounds and v_inf are always present in practice; when a
-        // response omits them the nominal value stands in, so a range query can
-        // never see a spurious 0 AU or 0 km/s.
-        a.distanceMinAU = detail::JsonTable::number(row, col.distMin).value_or(a.distanceAU);
-        a.distanceMaxAU = detail::JsonTable::number(row, col.distMax).value_or(a.distanceAU);
+        // The 3-sigma bounds are always present in practice. When a response
+        // omits them the nominal distance stands in, so a range query cannot
+        // match a spurious 0 AU; the row is flagged and the substitution counted.
+        const std::optional<double> distMin = detail::JsonTable::number(row, col.distMin);
+        const std::optional<double> distMax = detail::JsonTable::number(row, col.distMax);
+        a.distanceMinAU = distMin.value_or(a.distanceAU);
+        a.distanceMaxAU = distMax.value_or(a.distanceAU);
+        a.distRangeDerived = !distMin || !distMax;
+        if (a.distRangeDerived) {
+            ++report.derivedDistanceRanges;
+        }
         a.relVelocityKms = vRel.value_or(0.0);
-        a.vInfinityKms = detail::JsonTable::number(row, col.vInf).value_or(a.relVelocityKms);
+        // v_inf is left empty when absent rather than copied from v_rel: they
+        // are different quantities (v_inf excludes the Earth's gravitational
+        // focusing, so v_inf < v_rel), and substituting one for the other would
+        // silently corrupt a velocity query.
+        a.vInfinityKms = detail::JsonTable::number(row, col.vInf);
         a.absoluteMagnitudeH = detail::JsonTable::number(row, col.h);
         a.diameterKm = detail::JsonTable::number(row, col.diameter);
         a.diameterSigmaKm = detail::JsonTable::number(row, col.diameterSigma);

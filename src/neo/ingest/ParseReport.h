@@ -35,6 +35,9 @@ struct ValidationReport {
     std::size_t rowsSeen = 0;
     std::size_t rowsAccepted = 0;
     std::size_t rowsRejected = 0;
+    // CAD rows whose dist_min / dist_max were missing and were filled in from
+    // the nominal distance (see CloseApproach::distRangeDerived).
+    std::size_t derivedDistanceRanges = 0;
 
     // Null count per response column, in the order the response declared them.
     std::vector<std::pair<std::string, std::size_t>> nullCounts;

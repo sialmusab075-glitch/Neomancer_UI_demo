@@ -26,6 +26,10 @@ std::string ValidationReport::toString() const {
     std::snprintf(buf, sizeof buf, "%s (signature version %s)\n  rows: %zu seen, %zu accepted, %zu rejected",
                   signatureSource.c_str(), signatureVersion.c_str(), rowsSeen, rowsAccepted, rowsRejected);
     std::string out = buf;
+    if (derivedDistanceRanges > 0) {
+        std::snprintf(buf, sizeof buf, "\n  derived dist_min/dist_max from dist: %zu row(s)", derivedDistanceRanges);
+        out += buf;
+    }
     for (const auto& entry : nullCounts) {
         if (entry.second == 0) {
             continue;
@@ -54,6 +58,7 @@ void ValidationReport::merge(const ValidationReport& other) {
     rowsSeen += other.rowsSeen;
     rowsAccepted += other.rowsAccepted;
     rowsRejected += other.rowsRejected;
+    derivedDistanceRanges += other.derivedDistanceRanges;
     for (const auto& entry : other.nullCounts) {
         bool found = false;
         for (auto& mine : nullCounts) {

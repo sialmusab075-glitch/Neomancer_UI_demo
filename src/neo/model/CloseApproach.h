@@ -21,13 +21,22 @@ struct CloseApproach {
     double distanceMinAU = 0.0;  // "dist_min": minimum (3-sigma)
     double distanceMaxAU = 0.0;  // "dist_max": maximum (3-sigma)
     double relVelocityKms = 0.0; // "v_rel": relative to the approach body
-    double vInfinityKms = 0.0;   // "v_inf": relative to a massless body
 
     // Optional columns: "h" is absent for some comets; "diameter" only exists
     // when the request asked for it, and is null when no diameter is known.
+    // v_inf is NOT filled in from v_rel: the two are different quantities
+    // (v_inf excludes the body's gravitational focusing, so v_inf < v_rel), and
+    // substituting one for the other would silently corrupt a velocity query.
+    std::optional<double> vInfinityKms;      // "v_inf": relative to a massless body
     std::optional<double> absoluteMagnitudeH;
     std::optional<double> diameterKm;
     std::optional<double> diameterSigmaKm;
+
+    // True when dist_min / dist_max were absent and the nominal distance stands
+    // in for them. Unlike v_inf this fallback is kept, because a range query on
+    // distance must not see a spurious 0 AU, but it is counted in the
+    // ValidationReport so the substitution is never invisible.
+    bool distRangeDerived = false;
 
     bool matched() const { return objectIndex != kNoObject; }
 };

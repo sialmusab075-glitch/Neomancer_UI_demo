@@ -240,7 +240,10 @@ void testCadParsing() {
         check(neo::formatJulianDate(closest->approach.jdTdb).substr(0, 10) == "2029-04-13", "2029-04-13",
               neo::formatJulianDate(closest->approach.jdTdb));
         check(near(closest->approach.relVelocityKms, 7.42253895678452, 1e-12), "relative velocity");
-        check(closest->approach.vInfinityKms < closest->approach.relVelocityKms, "v_inf below v_rel");
+        check(closest->approach.vInfinityKms.has_value() &&
+                  *closest->approach.vInfinityKms < closest->approach.relVelocityKms,
+              "v_inf is present and below v_rel");
+        check(!closest->approach.distRangeDerived, "real CAD rows carry their own 3-sigma bounds");
         check(closest->approach.diameterKm.has_value() && near(*closest->approach.diameterKm, 0.34, 1e-9),
               "CAD diameter column read");
         check(closest->approach.distanceMinAU <= closest->approach.distanceAU &&
@@ -261,7 +264,13 @@ void testCadParsing() {
             check(!out[0].approach.diameterKm.has_value(), "absent diameter column stays empty");
             check(!out[0].approach.absoluteMagnitudeH.has_value(), "absent H column stays empty");
             check(near(out[0].approach.distanceMinAU, 0.01, 1e-12), "dist_min falls back to the nominal distance");
-            check(near(out[0].approach.vInfinityKms, 12.5, 1e-12), "v_inf falls back to v_rel");
+            check(near(out[0].approach.distanceMaxAU, 0.01, 1e-12), "dist_max falls back to the nominal distance");
+            check(out[0].approach.distRangeDerived, "the derived distance range is flagged on the row");
+            check(report.derivedDistanceRanges == 1, "and counted in the validation report");
+            check(!out[0].approach.vInfinityKms.has_value(),
+                  "absent v_inf stays empty: it is a different quantity from v_rel");
+            check(report.toString().find("derived dist_min/dist_max") != std::string::npos,
+                  "the report text names the derived rows");
         }
     }
     {
@@ -371,7 +380,7 @@ void testJulianDates() {
 // The flat approach vector is the memory-dominant structure once real CAD data
 // is loaded, so its size is pinned here: the stage 7 memory numbers quote it,
 // and a stray std::string in the struct would multiply it.
-static_assert(sizeof(neo::CloseApproach) <= 112, "CloseApproach grew: update the memory figures in NEO_PLAN.md");
+static_assert(sizeof(neo::CloseApproach) <= 120, "CloseApproach grew: update the memory figures in NEO_PLAN.md");
 static_assert(std::is_trivially_copyable<neo::CloseApproach>::value, "CloseApproach must stay trivially copyable");
 
 int main(int argc, char** argv) {

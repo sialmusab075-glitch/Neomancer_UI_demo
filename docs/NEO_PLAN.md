@@ -87,12 +87,12 @@ Dataset               records() + approaches() + find(pdes) / findBySpkId(spkid)
                       + approachesOf(index) -> ApproachSpan
 ```
 
-`CloseApproach` is 104 bytes on this toolchain (measured in `neo_tests`) and
+`CloseApproach` is 120 bytes on this toolchain (measured in `neo_tests`) and
 trivially copyable, with no strings: there can be millions of them, and every
-index built later stores `uint32_t` offsets into the one flat vector. At ~104 B
-per row, 1M approaches cost ~104 MB, which is the figure the stage 7 memory
-experiment reports; the three `std::optional<double>` members are 48 B of that
-and are the first thing to pack if it ever matters.
+index built later stores `uint32_t` offsets into the one flat vector. At 120 B
+per row, 1M approaches cost ~120 MB, which is the figure the stage 7 memory
+experiment reports; the four `std::optional<double>` members are 64 B of that
+(16 B each for 8 B of payload) and are the first thing to pack if it matters.
 
 ### Field mapping: SBDB Query API -> C++
 
@@ -143,10 +143,10 @@ Requested with `diameter=true&fullname=true`.
 | `jd` | `CloseApproach::jdTdb` | JD (TDB) | required |
 | `cd` | — | — | not stored; formatted from `jd` on display |
 | `dist` | `distanceAU` | AU | required |
-| `dist_min` | `distanceMinAU` | AU | falls back to `dist` if absent |
-| `dist_max` | `distanceMaxAU` | AU | falls back to `dist` if absent |
+| `dist_min` | `distanceMinAU` | AU | falls back to `dist`, row flagged `distRangeDerived` |
+| `dist_max` | `distanceMaxAU` | AU | same fallback and flag |
 | `v_rel` | `relVelocityKms` | km/s | relative to the approach body |
-| `v_inf` | `vInfinityKms` | km/s | falls back to `v_rel` if absent |
+| `v_inf` | `vInfinityKms` | km/s, optional | **never** filled in from `v_rel`: different quantity (`v_inf < v_rel`) |
 | `t_sigma_f` | — | — | not stored in v1 |
 | `h` | `absoluteMagnitudeH` | mag, optional | |
 | `diameter`, `diameter_sigma` | `diameterKm`, `diameterSigmaKm` | km, optional | null when unknown |
@@ -317,10 +317,14 @@ page size, and memory for the master vector and each index.
    a page.
 3. **nlohmann/json is confined** to `src/neo/ingest/detail/JsonTable.*`, which
    only `.cpp` files include. No public header exposes it.
-4. **Absent is not zero, but missing optional CAD columns get a documented
-   fallback:** `dist_min`/`dist_max` fall back to `dist`, `v_inf` to `v_rel`,
-   so a range query can never match a spurious 0 AU or 0 km/s. Physical values
-   (diameter, H, albedo) never get a fallback; they stay empty.
+4. **Absent is not zero.** One fallback survives, and it is recorded: when
+   `dist_min`/`dist_max` are missing the nominal `dist` stands in, the row sets
+   `distRangeDerived` and the `ValidationReport` counts it, so a distance range
+   query cannot match a spurious 0 AU and the substitution is never invisible.
+   `v_inf` gets no fallback: it is a different quantity from `v_rel` (it
+   excludes the Earth-s gravitational focusing, so `v_inf < v_rel`), so it is
+   `std::optional` and stays empty. Physical values (diameter, H, albedo) stay
+   empty too.
 5. **The join** resolves designations, then sorts the matched rows once by
    `(objectIndex, jdTdb)`. That single O(n log n) sort produces both the
    contiguous per-record range and chronological order inside it. Unmatched

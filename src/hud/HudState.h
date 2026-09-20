@@ -63,6 +63,7 @@ struct HudEvents {
     bool resultPrev = false;       // select the previous / next result and jump to it
     bool resultNext = false;
     int  rowClicked = -1;          // a NEO RESULTS row was clicked: select it and jump to it
+    bool clearSelection = false;   // the selected flyby's own checkbox was unchecked: no selection
 };
 
 } // namespace hud

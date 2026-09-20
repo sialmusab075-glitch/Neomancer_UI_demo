@@ -305,6 +305,22 @@ void Application::adoptOutcome(neo::NeoOutcome&& outcome) {
     outcomeFrame_ = frameIndex_;
     earthUi_.selected = -1;
     earthUi_.hovered = -1;
+    earthUi_.checks.reset(outcome_.ok ? outcome_.scene.flybys.size() : 0); // a new result: everything checked
+    if (!devChecks_.empty()) { // dev hook, for scripted screenshots: start with some rows unchecked
+        const std::size_t n = earthUi_.checks.size();
+        const int arg = devChecks_.find(':') != std::string::npos ? std::atoi(devChecks_.c_str() + devChecks_.find(':') + 1) : 0;
+        if (devChecks_ == "none") {
+            earthUi_.checks.setAll(false);
+        } else if (devChecks_.rfind("first:", 0) == 0 && arg > 0) {
+            earthUi_.checks.setAll(false);
+            earthUi_.checks.setRange(0, static_cast<std::size_t>(arg) - 1, true);
+        } else if (devChecks_.rfind("every:", 0) == 0 && arg > 0) {
+            for (std::size_t i = 0; i < n; ++i) {
+                earthUi_.checks.set(i, i % static_cast<std::size_t>(arg) == 0);
+            }
+        }
+        devChecks_.clear();
+    }
     flybyLayout_.clear();
     if (!outcome_.ok) {
         formErrors_ = outcome_.errors;
@@ -374,6 +390,9 @@ void Application::applyEarthEvents(const hud::HudEvents& ev) {
     if (!earthSceneShown()) {
         return;
     }
+    if (ev.clearSelection) {
+        clearSelectedRecord(); // its checkbox was unchecked: fall back to no selection
+    }
     if (ev.runQuery) {
         submitFilter();
     }
@@ -418,11 +437,15 @@ void Application::earthPicking(const render::FrameViewport& vp) {
     if (devHover_ == -2) { // any flyby that is on screen right now, other than the selected one
         for (std::size_t i = 0; i < flybyLayout_.size(); ++i) {
             const render::FlybyScreen& fs = flybyLayout_[i];
-            if (fs.visible && !fs.occluded && fs.sp.onScreen && static_cast<int>(i) != earthUi_.selected) {
+            if (fs.visible && !fs.occluded && fs.sp.onScreen && static_cast<int>(i) != earthUi_.selected &&
+                earthUi_.checks.drawn(i, earthUi_.selected)) {
                 earthUi_.hovered = static_cast<int>(i);
                 break;
             }
         }
+    }
+    if (earthUi_.hovered >= 0 && !earthUi_.checks.drawn(static_cast<std::size_t>(earthUi_.hovered), earthUi_.selected)) {
+        earthUi_.hovered = -1; // a hidden flyby is not hovered
     }
     if (viewMode_ != ViewMode::Earth || flybyLayout_.empty() || ImGui::GetIO().WantCaptureMouse) {
         return;
@@ -432,13 +455,13 @@ void Application::earthPicking(const render::FrameViewport& vp) {
     if (x < vp.viewMin.x || y < vp.viewMin.y || x > vp.viewMin.x + vp.viewSize.x || y > vp.viewMin.y + vp.viewSize.y) {
         return;
     }
-    const int under = render::pickFlyby(outcome_.scene, flybyLayout_, vp, x, y);
+    const int under = render::pickFlyby(outcome_.scene, flybyLayout_, vp, x, y, &earthUi_.checks, earthUi_.selected);
     if (under >= 0) {
         earthUi_.hovered = under;
     }
     if (in.clicked()) {
         const float cx = in.clickX(), cy = in.clickY();
-        const int hit = render::pickFlyby(outcome_.scene, flybyLayout_, vp, cx, cy);
+        const int hit = render::pickFlyby(outcome_.scene, flybyLayout_, vp, cx, cy, &earthUi_.checks, earthUi_.selected);
         if (hit >= 0) {
             selectFlyby(hit, false); // a click on a marker selects it; the clock stays where it is
         }
@@ -552,7 +575,8 @@ void Application::frameEarthOverlay(const render::FrameViewport& vp, const hud::
         dl->AddText(font, textPx, ImVec2(x + pad, y + pad), col, line1);
         dl->AddText(font, textPx, ImVec2(x + pad, y + pad + textPx), t.textLabel, line2);
     };
-    if (earthUi_.hovered != earthUi_.selected) {
+    if (earthUi_.hovered != earthUi_.selected && earthUi_.hovered >= 0 &&
+        earthUi_.checks.drawn(static_cast<std::size_t>(earthUi_.hovered), earthUi_.selected)) {
         mark(earthUi_.hovered, false);
     }
     mark(earthUi_.selected, true);
@@ -567,7 +591,10 @@ void Application::renderEarthScene(const render::FrameViewport& vp, const render
     f.scene = haveOutcome_ && outcome_.ok ? &outcome_.scene : nullptr;
     f.layout = &flybyLayout_;
     f.selected = earthUi_.selected;
-    f.hovered = earthUi_.hovered;
+    // A row hovered in NEO RESULTS previews its path only if that flyby is drawn.
+    f.hovered = earthUi_.hovered >= 0 && earthUi_.checks.drawn(static_cast<std::size_t>(earthUi_.hovered), earthUi_.selected)
+                    ? earthUi_.hovered : -1;
+    f.checks = &earthUi_.checks;
     const int earth = system_.indexOfTableRow(sim::kEarth);
     if (earth >= 0) {
         f.earthColour = render::rgb(system_.body(earth).data().colorRGB);

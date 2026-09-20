@@ -353,24 +353,59 @@ void drawNeoResultsPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& 
             EndPanel();
             return;
         }
+        const std::vector<neo::Flyby>& flybys = view.scene->flybys;
+        const std::size_t total = flybys.size();
+        if (ui.checks.size() != total) {
+            ui.checks.reset(total); // defensive: a result the checkboxes were not reset for
+        }
+        // Row-selected flyby and its checkbox BEFORE anything below changes either.
+        const bool selectedWasChecked = ui.selected >= 0 && ui.checks.checked(static_cast<std::size_t>(ui.selected));
+        bool changed = false;
+        static int anchor = -1; // the last row whose checkbox was toggled, for shift-click ranges
+
+        // SELECT ALL / SELECT NONE and the live count. Checking only decides what is DRAWN.
+        pushFontSize(t.sizeSmall);
+        if (Button("SELECT ALL", 0.0f, false)) {
+            ui.checks.setAll(true);
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (Button("SELECT NONE", 0.0f, false)) {
+            ui.checks.setAll(false);
+            changed = true;
+        }
+        ImGui::SameLine();
+        char shown[64];
+        std::snprintf(shown, sizeof shown, "%s of %s shown", thousands(ui.checks.drawnCount(ui.selected)).c_str(),
+                      thousands(total).c_str());
+        TinyText(shown, t.textValue);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Checkbox: draw or hide that flyby (the query is not re-run).\n"
+                              "Click a row: select it for TARGET and jump the clock; its checkbox is not touched.\n"
+                              "Shift-click: a range from the last toggled row.  Ctrl-click a row: toggle its checkbox.\n"
+                              "The selected flyby is always drawn; unchecking it clears the selection.");
+        }
+        popFont();
+
         pushFontSize(t.sizeLabel);
         const ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit |
                                       ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings;
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(3.0f * s, 1.5f * s));
-        const bool tableOpen = ImGui::BeginTable("##neo_results", 6, flags, ImVec2(0.0f, 0.0f));
+        const bool tableOpen = ImGui::BeginTable("##neo_results", 5, flags, ImVec2(0.0f, 0.0f));
         if (tableOpen) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            // Six narrow columns: the rest of an asteroid (H, orbit class, MOID, min/max distance)
-            // is in TARGET / OBSERVATION. A PHA row is drawn in the accent colour.
-            ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 22.0f * s);
+            // Five narrow columns: the rest of an asteroid (H, v_rel, orbit class, min/max distance)
+            // is in TARGET / OBSERVATION and on the marker's tag. A PHA row is drawn in the accent colour.
+            ImGui::TableSetupColumn("##show", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoHeaderLabel, 18.0f * s);
             ImGui::TableSetupColumn("DESIGNATION", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-            ImGui::TableSetupColumn("D KM", ImGuiTableColumnFlags_WidthFixed, 46.0f * s);
-            ImGui::TableSetupColumn("DATE", ImGuiTableColumnFlags_WidthFixed, 68.0f * s);
-            ImGui::TableSetupColumn("LD", ImGuiTableColumnFlags_WidthFixed, 42.0f * s);
-            ImGui::TableSetupColumn("KM/S", ImGuiTableColumnFlags_WidthFixed, 38.0f * s);
+            ImGui::TableSetupColumn("D KM", ImGuiTableColumnFlags_WidthFixed, 40.0f * s);
+            ImGui::TableSetupColumn("DATE", ImGuiTableColumnFlags_WidthFixed, 64.0f * s);
+            ImGui::TableSetupColumn("LD", ImGuiTableColumnFlags_WidthFixed, 38.0f * s);
             ImGui::TableHeadersRow();
 
-            const std::vector<neo::Flyby>& flybys = view.scene->flybys;
+            const ImGuiIO& io = ImGui::GetIO();
+            const bool shift = io.KeyShift;
+            const bool ctrl = io.KeyCtrl || io.KeySuper;
             const float rowH = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
 
             // Keep the selected row in view when the selection changes elsewhere
@@ -388,30 +423,55 @@ void drawNeoResultsPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& 
             }
 
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(flybys.size()), rowH);
+            clipper.Begin(static_cast<int>(total), rowH);
             while (clipper.Step()) {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                    const neo::Flyby& f = flybys[static_cast<std::size_t>(i)];
+                    const std::size_t row = static_cast<std::size_t>(i);
+                    const neo::Flyby& f = flybys[row];
                     const neo::Asteroid& a = view.dataset->records()[f.object].object;
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     char cell[64];
-                    std::snprintf(cell, sizeof cell, "%d", i + 1);
                     const bool selected = i == ui.selected;
-                    // A selectable spanning the whole row makes it clickable.
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(f.pha ? t.accent : t.textValue));
+
+                    // A selectable spanning the whole row makes it clickable; the checkbox is drawn on
+                    // top of it (AllowOverlap), so clicking the box does not select the row.
+                    const ImVec2 cellPos = ImGui::GetCursorScreenPos();
                     char id[24];
-                    std::snprintf(id, sizeof id, "%s##row%d", cell, i);
-                    if (ImGui::Selectable(id, selected, ImGuiSelectableFlags_SpanAllColumns)) {
-                        ev.rowClicked = i;
+                    std::snprintf(id, sizeof id, "##row%d", i);
+                    if (ImGui::Selectable(id, selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                        if (ctrl) { // multi-toggle: flips this row's checkbox, selects nothing
+                            ui.checks.toggle(row);
+                            anchor = i;
+                            changed = true;
+                        } else if (shift && anchor >= 0 && static_cast<std::size_t>(anchor) < total) { // range: like the anchor
+                            ui.checks.setRange(static_cast<std::size_t>(anchor), row, ui.checks.checked(static_cast<std::size_t>(anchor)));
+                            changed = true;
+                        } else {
+                            ev.rowClicked = i; // select for TARGET and jump the clock; the checkbox is left alone
+                        }
                     }
-                    ImGui::PopStyleColor();
-                    if (ImGui::IsItemHovered()) {
+                    const bool rowHovered = ImGui::IsItemHovered();
+                    ImGui::SetCursorScreenPos(cellPos);
+                    bool on = ui.checks.checked(row);
+                    std::snprintf(cell, sizeof cell, "##chk%d", i);
+                    if (Checkbox(cell, &on)) {
+                        if (shift && anchor >= 0 && static_cast<std::size_t>(anchor) < total) {
+                            ui.checks.setRange(static_cast<std::size_t>(anchor), row, on);
+                        } else {
+                            ui.checks.set(row, on);
+                        }
+                        anchor = i;
+                        changed = true;
+                    }
+                    if (rowHovered || ImGui::IsItemHovered()) {
                         ui.hovered = i;
                     }
 
                     ImGui::TableSetColumnIndex(1);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(f.pha ? t.accent : t.textValue));
                     ImGui::TextUnformatted(a.label().c_str());
+                    ImGui::PopStyleColor();
                     ImGui::TableSetColumnIndex(2);
                     if (a.physical.diameterKm) {
                         std::snprintf(cell, sizeof cell, "%.3f", *a.physical.diameterKm);
@@ -426,12 +486,13 @@ void drawNeoResultsPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& 
                     ImGui::TableSetColumnIndex(4);
                     std::snprintf(cell, sizeof cell, "%.3f", f.distanceAU / neo::kLunarDistanceAU);
                     ImGui::TextUnformatted(cell);
-                    ImGui::TableSetColumnIndex(5);
-                    std::snprintf(cell, sizeof cell, "%.2f", f.vRelKms);
-                    ImGui::TextUnformatted(cell);
                 }
             }
             ImGui::EndTable();
+        }
+        // Unchecking the selected flyby's own box (by any route) clears the selection.
+        if (changed && neo::selectionAfterCheckChange(ui.selected, selectedWasChecked, ui.checks) != ui.selected) {
+            ev.clearSelection = true;
         }
         ImGui::PopStyleVar();
         popFont();

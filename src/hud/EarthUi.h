@@ -27,6 +27,7 @@ struct EarthUiState {
     bool  showRings = true;
     int   selected = -1;      // index into the flyby scene, -1 = none
     int   hovered = -1;
+    neo::FlybyChecks checks;  // which flybys of the result are drawn (NEO RESULTS checkboxes)
 };
 
 // One turn every 20 s at speed 1.0; independent of the simulation clock.

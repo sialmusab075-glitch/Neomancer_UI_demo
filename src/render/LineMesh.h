@@ -22,6 +22,8 @@ public:
     void draw() const;
     // Draws only vertices [first, first + count): one path out of many sharing a buffer.
     void drawRange(GLint first, GLsizei count) const;
+    // Several ranges in ONE call (glMultiDrawArrays): the checked flybys of the Earth view.
+    void drawMulti(const GLint* firsts, const GLsizei* counts, GLsizei drawCount) const;
 
 private:
     GLuint vao_ = 0;

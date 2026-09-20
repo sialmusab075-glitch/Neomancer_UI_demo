@@ -51,4 +51,13 @@ void LineMesh::drawRange(GLint first, GLsizei count) const {
     glBindVertexArray(0);
 }
 
+void LineMesh::drawMulti(const GLint* firsts, const GLsizei* counts, GLsizei drawCount) const {
+    if (!vao_ || drawCount <= 0) {
+        return;
+    }
+    glBindVertexArray(vao_);
+    glMultiDrawArrays(GL_LINES, firsts, counts, drawCount);
+    glBindVertexArray(0);
+}
+
 } // namespace render

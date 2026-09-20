@@ -137,4 +137,43 @@ double flybyExitJd(const Flyby& flyby, const EarthViewScale& scale);
 int nextFlyby(const FlybyScene& scene, double jdNow);
 int prevFlyby(const FlybyScene& scene, double jdNow);
 
+// Which flybys of a result are drawn: one checkbox per flyby (per row of NEO RESULTS).
+//
+// This is a pure filter over the result that is already there. Changing it never runs a
+// query and never rebuilds the path meshes (they hold every flyby; the renderer just draws
+// the checked ones), so it is instant. A new result resets it to "everything checked".
+//
+// DRAWN = checked, or the row-selected flyby. Clicking a row selects it (TARGET and the
+// highlighted path) WITHOUT touching its checkbox, and a selected flyby is always shown; the
+// checkbox only decides what is drawn besides it.
+class FlybyChecks {
+public:
+    void reset(std::size_t n);                       // a new result: n flybys, all checked
+    std::size_t size() const { return on_.size(); }
+    std::size_t checkedCount() const { return count_; }
+    bool allChecked() const { return count_ == on_.size(); }
+
+    bool checked(std::size_t i) const { return i < on_.size() && on_[i] != 0; }
+    void set(std::size_t i, bool on);
+    void toggle(std::size_t i) { set(i, !checked(i)); }
+    void setAll(bool on);                            // SELECT ALL / SELECT NONE
+    void setRange(std::size_t a, std::size_t b, bool on); // inclusive, in either order (shift-click)
+
+    bool drawn(std::size_t i, int selected) const { return checked(i) || static_cast<int>(i) == selected; }
+    std::size_t drawnCount(int selected) const;      // "N of M shown"
+    std::vector<int> drawnList(int selected) const;  // indices, in result order
+
+private:
+    std::vector<std::uint8_t> on_;
+    std::size_t count_ = 0;
+};
+
+// Unchecking the row-selected flyby's own checkbox clears the selection (simplest behaviour: no
+// detail for something no longer shown). `wasChecked` is its state before the change; a
+// selected row that was already unchecked (selected by clicking it) is left alone by later
+// changes to other rows. Returns the selection to keep: `selected`, or -1.
+inline int selectionAfterCheckChange(int selected, bool wasChecked, const FlybyChecks& now) {
+    return selected >= 0 && wasChecked && !now.checked(static_cast<std::size_t>(selected)) ? -1 : selected;
+}
+
 } // namespace neo

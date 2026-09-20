@@ -90,13 +90,13 @@ void layoutFlybys(const neo::FlybyScene& scene, double jdNow, const OrbitCamera&
 }
 
 int pickFlyby(const neo::FlybyScene& scene, const std::vector<FlybyScreen>& layout, const FrameViewport& vp,
-              float windowX, float windowY) {
+              float windowX, float windowY, const neo::FlybyChecks* checks, int selected) {
     int best = -1;
     float bestScore = 1e30f;
     const float pxToWindow = vp.dpiScale / std::max(vp.fbPerWindow(), 1e-3f);
     for (std::size_t i = 0; i < scene.flybys.size() && i < layout.size(); ++i) {
         const FlybyScreen& s = layout[i];
-        if (!s.visible || s.occluded || !s.sp.inFront || !s.sp.onScreen) {
+        if ((checks != nullptr && !checks->drawn(i, selected)) || !s.visible || s.occluded || !s.sp.inFront || !s.sp.onScreen) {
             continue;
         }
         // A generous target: the marker's radius plus a margin, never below 9 px.
@@ -277,7 +277,8 @@ void EarthRenderer::drawMarkers(const EarthFrame& frame, const glm::mat4& viewPr
     const glm::vec3 neutral = rgb(st.orbitPlain) * 1.5f;
     for (std::size_t i = 0; i < flybys.size() && i < frame.layout->size(); ++i) {
         const FlybyScreen& s = (*frame.layout)[i];
-        if (!s.visible || markers_.size() + 2 > markerCapacity_) {
+        if ((frame.checks != nullptr && !frame.checks->drawn(i, frame.selected)) || !s.visible ||
+            markers_.size() + 2 > markerCapacity_) {
             continue;
         }
         const bool selected = static_cast<int>(i) == frame.selected;
@@ -407,11 +408,33 @@ void EarthRenderer::draw(const EarthFrame& frame, glm::vec2 targetPx, double tim
         pathThinShader_.set("uViewProj", viewProj);
         // Additive lines pile up: the more flybys there are, the fainter each one is drawn,
         // so a thousand paths read as a field and the selected one still stands out.
-        const float crowd = std::clamp(std::sqrt(40.0f / static_cast<float>(std::max<std::size_t>(frame.scene->flybys.size(), 1))), 0.3f, 1.0f);
-        pathThinShader_.set("uColor", rgba(st.orbitPlain, 0.34f * crowd));
-        pathsOther_.draw();
-        pathThinShader_.set("uColor", rgba(st.accent, 0.50f * crowd));
-        pathsPha_.draw();
+        // The checked flybys are what is drawn, so the count is theirs.
+        const bool subset = frame.checks != nullptr && frame.checks->size() == frame.scene->flybys.size() &&
+                            !frame.checks->allChecked();
+        const std::size_t shown = subset ? frame.checks->drawnCount(frame.selected) : frame.scene->flybys.size();
+        const float crowd = std::clamp(std::sqrt(40.0f / static_cast<float>(std::max<std::size_t>(shown, 1))), 0.3f, 1.0f);
+        if (!subset) {
+            pathThinShader_.set("uColor", rgba(st.orbitPlain, 0.34f * crowd));
+            pathsOther_.draw();
+            pathThinShader_.set("uColor", rgba(st.accent, 0.50f * crowd));
+            pathsPha_.draw();
+        } else {
+            // A subset: the same meshes, only the checked ranges, in one multi-draw call per mesh.
+            for (int m = 0; m < 2; ++m) {
+                multiFirst_[m].clear();
+                multiCount_[m].clear();
+            }
+            for (std::size_t i = 0; i < ranges_.size(); ++i) {
+                if (frame.checks->checked(i)) {
+                    multiFirst_[ranges_[i].mesh].push_back(ranges_[i].first);
+                    multiCount_[ranges_[i].mesh].push_back(ranges_[i].count);
+                }
+            }
+            pathThinShader_.set("uColor", rgba(st.orbitPlain, 0.34f * crowd));
+            pathsOther_.drawMulti(multiFirst_[1].data(), multiCount_[1].data(), static_cast<GLsizei>(multiFirst_[1].size()));
+            pathThinShader_.set("uColor", rgba(st.accent, 0.50f * crowd));
+            pathsPha_.drawMulti(multiFirst_[0].data(), multiCount_[0].data(), static_cast<GLsizei>(multiFirst_[0].size()));
+        }
 
         // The selected and hovered paths: a soft halo and a bright core.
         pathShader_.use();

@@ -51,8 +51,9 @@ void layoutFlybys(const neo::FlybyScene& scene, double jdNow, const OrbitCamera&
                   std::vector<FlybyScreen>& out);
 
 // Nearest visible, unoccluded marker under a window-pixel position, or -1.
+// Flybys that are not drawn (unchecked and not selected) are not picked either.
 int pickFlyby(const neo::FlybyScene& scene, const std::vector<FlybyScreen>& layout, const FrameViewport& vp,
-              float windowX, float windowY);
+              float windowX, float windowY, const neo::FlybyChecks* checks = nullptr, int selected = -1);
 
 struct EarthFrame {
     const OrbitCamera*    camera = nullptr;
@@ -62,6 +63,7 @@ struct EarthFrame {
     const neo::FlybyScene* scene = nullptr;   // may be null: just the Earth
     const std::vector<FlybyScreen>* layout = nullptr;
     int                   selected = -1;
+    const neo::FlybyChecks* checks = nullptr; // which flybys are drawn (null = all); see neo::FlybyChecks
     int                   hovered = -1;
     glm::vec3             earthColour{0.2f, 0.4f, 0.8f}; // the body table's colour: grid fallback and atmosphere tint
     bool                  showRings = true;
@@ -121,6 +123,8 @@ private:
     LineMesh pathsPha_;
     LineMesh pathsOther_;
     std::vector<PathRange> ranges_; // one per flyby, parallel to FlybyScene::flybys
+    std::vector<GLint> multiFirst_[2];   // the checked flybys' ranges, per mesh (0 = PHA, 1 = other)
+    std::vector<GLsizei> multiCount_[2];
 
     GLuint markerVao_ = 0, markerVbo_ = 0;
     std::vector<MarkerVertex> markers_; // rebuilt every frame, capacity kept

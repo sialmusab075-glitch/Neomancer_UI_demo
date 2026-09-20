@@ -928,7 +928,7 @@ the viewport's top-right corner and in the EARTH VIEW panel.
 NEO FILTER (RUN + result count + one-line EXPLAIN on top, then date window, max distance in
 LD or AU, min/max diameter with diameter mode, v_rel range, PHA only, grazing only, sort,
 top-K), EARTH VIEW (rotation, prev/next result, next approach, rings, scale legend),
-NEO RESULTS (clickable table: select + jump the clock to the approach), and TARGET ·
+NEO RESULTS (a table with a checkbox per row, see "Choosing what is drawn" below), and TARGET ·
 OBSERVATION for the selected asteroid (designation, D measured/estimated, H, PHA, date,
 nominal/min/max distance in LD and km, v_rel, v_inf). The panels dock into the nodes of
 the panels they replace; an `imgui.ini` from before the Earth view still docks them
@@ -936,6 +936,45 @@ the panels they replace; an `imgui.ini` from before the Earth view still docks t
 
 Each result is an object *with its matching approaches*, so 50 objects can be 116 flybys.
 The flyby capped at 1,000 (`kMaxFlybys`); the panel says how many were not drawn.
+
+### Choosing what is drawn: a checkbox per result row
+
+Every row of NEO RESULTS is one flyby (an object with three matching approaches has three
+rows) and has a checkbox. Above the table: **SELECT ALL**, **SELECT NONE** and a live
+`N of M shown`.
+
+- **Two separate concerns.** The checkbox decides what is *drawn*. Clicking the row (not the
+  box) selects it for TARGET · OBSERVATION and the highlighted path and jumps the clock, as
+  before, and does **not** change its checkbox.
+- **Default: everything checked**, which is the old behaviour; every new result resets the
+  boxes to all checked. The 1,000-flyby cap is applied when the scene is built, so it still
+  bounds M.
+- **Drawn = checked, or row-selected.** A selected flyby is always drawn (its highlight is its
+  path), even when its own box is unchecked (it was selected by clicking the row). Unchecking
+  the *selected* flyby's box, by any route (its checkbox, a shift range, ctrl-click, SELECT
+  NONE), **clears the selection** (`neo::selectionAfterCheckChange`: no detail for something
+  no longer shown; the selection is shared with the solar view, so it clears there too). A row
+  that was selected while unchecked stays selected through later changes to other rows.
+  `N of M shown` counts what is drawn, so it includes such a selected row.
+- **Shift-click** (checkbox or row): apply the state to the range from the last toggled row.
+  **Ctrl/Cmd-click a row**: toggle its checkbox without selecting it.
+- **Instant, no query.** `neo::FlybyChecks` (pure, tested) is only a filter over the result that
+  is already there. Nothing is sent to `NeoService` and the path meshes are **not** rebuilt:
+  they still hold every flyby, and the renderer draws the checked ranges of each mesh in one
+  `glMultiDrawArrays` call (still the native 1 px lines; the selected and hovered paths keep
+  their halo). Unchecked flybys have no marker, no hover and no click target, and a hovered
+  table row previews its path only if that flyby is drawn. The per-path fade scales with the
+  number *drawn*, so a handful of paths is not drawn faintly. With 500 of 1,000 checked the
+  view runs at 200 fps uncapped (179 with all 1,000).
+- Tests (`neo_earthview_tests`, 155 checks): the model (toggle, ranges either way and past the
+  end, SELECT ALL / NONE on every row, the selected row always drawn and never counted twice),
+  the selection rule, and a real service result that is fingerprinted before and after a run of
+  checkbox changes: the result and flybys are identical and `NeoService::latestSerial()` has not
+  moved, nothing is busy, nothing is delivered. Only a RUN queries, and its result comes back
+  fully checked.
+
+A SHOW ALL / SELECTED ONLY switch was considered first and dropped in favour of this, which
+covers it (SELECT NONE, then click one row).
 
 ### Performance (Intel UHD, 1920x1094 window, 4x MSAA HDR + bloom)
 
@@ -955,13 +994,14 @@ With vsync the view holds 60 fps at 1,000 flybys.
 
 `SOLSIM_EARTH=1` (start in the view; screenshots wait for the first result),
 `SOLSIM_NEO_TOPK`, `SOLSIM_NEO_MAXLD`, `SOLSIM_NEO_PHA=1`, `SOLSIM_NEO_FROM/TO`,
-`SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i|any`, `SOLSIM_EARTH_ENTER=n` /
+`SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i|any`, `SOLSIM_NEO_CHECKS=none|first:N|every:N`, `SOLSIM_EARTH_ENTER=n` /
 `SOLSIM_EARTH_LEAVE=n` (frame numbers), `SOLSIM_NEO_DB`, `SOLSIM_VSYNC=0`.
 
 ### Not done / known gaps
 
-- Real cursor hover and click picking, the results-row click, prev/next and the spin
-  controls were driven only through the same code paths by hooks, not by hand.
+- Real cursor hover and click picking, the results-row click and checkboxes (including
+  shift and ctrl clicks), prev/next and the spin controls were driven only through the same
+  code paths by hooks, not by hand; the checkbox model behind them is unit-tested.
 - `layoutFlybys` / `pickFlyby` live in the GL renderer file and have no unit test.
 - "Show the selected asteroid's orbit in the solar view" was skipped as too costly for
   the first version (see section 15).

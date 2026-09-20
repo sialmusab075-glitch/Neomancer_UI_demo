@@ -224,4 +224,50 @@ int prevFlyby(const FlybyScene& scene, double jdNow) {
     return best;
 }
 
+void FlybyChecks::reset(std::size_t n) {
+    on_.assign(n, 1);
+    count_ = n;
+}
+
+void FlybyChecks::set(std::size_t i, bool on) {
+    if (i >= on_.size() || (on_[i] != 0) == on) {
+        return;
+    }
+    on_[i] = on ? 1 : 0;
+    if (on) {
+        ++count_;
+    } else {
+        --count_;
+    }
+}
+
+void FlybyChecks::setAll(bool on) {
+    std::fill(on_.begin(), on_.end(), static_cast<std::uint8_t>(on ? 1 : 0));
+    count_ = on ? on_.size() : 0;
+}
+
+void FlybyChecks::setRange(std::size_t a, std::size_t b, bool on) {
+    if (a > b) {
+        std::swap(a, b);
+    }
+    for (std::size_t i = a; i <= b && i < on_.size(); ++i) {
+        set(i, on);
+    }
+}
+
+std::size_t FlybyChecks::drawnCount(int selected) const {
+    const bool extra = selected >= 0 && static_cast<std::size_t>(selected) < on_.size() && !checked(static_cast<std::size_t>(selected));
+    return count_ + (extra ? 1 : 0);
+}
+
+std::vector<int> FlybyChecks::drawnList(int selected) const {
+    std::vector<int> out;
+    for (std::size_t i = 0; i < on_.size(); ++i) {
+        if (drawn(i, selected)) {
+            out.push_back(static_cast<int>(i));
+        }
+    }
+    return out;
+}
+
 } // namespace neo

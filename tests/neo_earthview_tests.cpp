@@ -643,6 +643,137 @@ void testService() {
     std::filesystem::remove_all(dir, ec);
 }
 
+// --- NEO RESULTS checkboxes: what is drawn ------------------------------------------------------
+
+std::string sceneFingerprint(const neo::FlybyScene& scene) {
+    std::string f = std::to_string(scene.flybys.size()) + "/" + std::to_string(scene.available);
+    for (const neo::Flyby& fl : scene.flybys) {
+        f += "|" + std::to_string(fl.object) + ":" + std::to_string(fl.approach) + ":" + num(fl.tcaJd);
+    }
+    return f;
+}
+
+void testChecks() {
+    std::printf("[checks] the results checkboxes only change the drawn subset\n");
+
+    // The model on its own.
+    neo::FlybyChecks c;
+    check(c.size() == 0 && c.drawnList(-1).empty() && c.allChecked(), "no result: nothing to draw");
+    c.reset(10);
+    check(c.size() == 10 && c.checkedCount() == 10 && c.allChecked(), "a new result starts with every flyby checked");
+    std::vector<int> everything;
+    for (int i = 0; i < 10; ++i) everything.push_back(i);
+    check(c.drawnList(-1) == everything && c.drawnCount(-1) == 10, "so everything is drawn (the previous behaviour)");
+
+    c.toggle(3);
+    check(!c.checked(3) && c.checkedCount() == 9 && !c.allChecked(), "unchecking one row removes exactly that one");
+    std::vector<int> without3 = everything;
+    without3.erase(without3.begin() + 3);
+    check(c.drawnList(-1) == without3, "and only it leaves the drawn subset");
+    c.toggle(3);
+    check(c.drawnList(-1) == everything && c.checkedCount() == 10, "checking it again brings it back");
+    c.set(99, false);
+    c.set(3, true); // already checked: no change
+    check(c.checkedCount() == 10 && !c.checked(99), "out-of-range and no-op changes do nothing");
+
+    // SELECT NONE / SELECT ALL touch every row.
+    c.setAll(false);
+    bool none = c.checkedCount() == 0 && c.drawnList(-1).empty();
+    for (std::size_t i = 0; i < c.size(); ++i) none = none && !c.checked(i);
+    check(none, "SELECT NONE unchecks every row and empties the drawn subset");
+    c.setAll(true);
+    bool all = c.checkedCount() == 10 && c.drawnList(-1) == everything && c.allChecked();
+    for (std::size_t i = 0; i < c.size(); ++i) all = all && c.checked(i);
+    check(all, "SELECT ALL checks every row and restores the whole drawn subset");
+
+    // Shift-click ranges, either direction, clamped.
+    c.setRange(2, 5, false);
+    check(c.checkedCount() == 6 && !c.checked(2) && !c.checked(5) && c.checked(1) && c.checked(6), "a range unchecks rows 2..5 inclusive");
+    c.setRange(5, 2, true);
+    check(c.allChecked(), "a range given backwards works the same way");
+    c.setRange(8, 500, false);
+    check(c.checkedCount() == 8 && !c.checked(9) && c.checked(7), "a range past the end is clamped");
+
+    // The row-selected flyby is always drawn, whatever its checkbox says.
+    c.setAll(false);
+    check(c.drawnList(4) == std::vector<int>{4} && c.drawnCount(4) == 1, "a selected but unchecked flyby is still drawn");
+    c.set(4, true);
+    check(c.drawnList(4) == std::vector<int>{4} && c.drawnCount(4) == 1, "and is not counted twice when it is also checked");
+    c.set(7, true);
+    check(c.drawnList(4) == (std::vector<int>{4, 7}) && c.drawnCount(4) == 2, "it is drawn together with the checked ones");
+    check(c.drawnList(-1) == (std::vector<int>{4, 7}), "with no selection only the checked ones are");
+
+    // Unchecking the selected flyby's own box clears the selection; other changes do not.
+    neo::FlybyChecks r;
+    r.reset(6);
+    r.toggle(4);
+    check(neo::selectionAfterCheckChange(4, true, r) == -1, "unchecking the selected row clears the selection");
+    r.reset(6);
+    r.toggle(1);
+    check(neo::selectionAfterCheckChange(4, true, r) == 4, "unchecking a different row keeps it");
+    r.setAll(false);
+    check(neo::selectionAfterCheckChange(4, true, r) == -1, "SELECT NONE clears it too (its box was checked)");
+    check(neo::selectionAfterCheckChange(4, false, r) == 4, "a row selected while unchecked stays selected through later changes");
+    check(neo::selectionAfterCheckChange(-1, true, r) == -1, "no selection stays none");
+
+    // Against a real result from the service: none of this may touch the result or the service.
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "neo_earthview_checks_tests";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    const std::string path = (dir / "neo.db").string();
+    std::vector<Obj> objects;
+    std::vector<App> approaches;
+    for (int i = 0; i < 40; ++i) {
+        objects.push_back({"2032 H" + std::to_string(i), std::nullopt, 21.0 + 0.05 * i, std::optional<bool>(i % 4 == 0)});
+        approaches.push_back({static_cast<std::size_t>(i), jd("2032-03-01") + 2.0 * i, 0.002 + 0.0002 * i, 7.0 + 0.1 * i});
+    }
+    const neo::Dataset source = buildDataset(objects, approaches);
+    neo::DatabaseMeta meta;
+    check(neo::saveDatabase(source, meta, path).ok, "write a test database");
+
+    neo::NeoService service;
+    service.startLoad(path);
+    check(waitFor([&] { return service.state() == neo::NeoService::State::Ready; }), "the database loads");
+    neo::Query q;
+    q.sortBy = neo::SortField::Distance;
+    q.topK = 12;
+    service.submit(q, neo::EarthViewScale());
+    neo::NeoOutcome out;
+    check(waitFor([&] { return service.poll(out); }) && out.ok && out.scene.flybys.size() == 12, "a 12-flyby result arrives");
+
+    neo::FlybyChecks checks;
+    checks.reset(out.scene.flybys.size()); // what the application does when a result is adopted
+    const std::uint64_t serial = service.latestSerial();
+    const std::string before = sceneFingerprint(out.scene);
+    const std::size_t rowsBefore = out.result.rows.size();
+    check(checks.drawnList(0).size() == 12, "a new result draws all 12 flybys");
+
+    checks.toggle(2);
+    checks.toggle(9);
+    check(checks.drawnList(0).size() == 10 && !checks.checked(2) && !checks.checked(9), "unchecking two rows draws the other ten");
+    checks.setRange(4, 7, false);
+    check(checks.drawnList(0) == (std::vector<int>{0, 1, 3, 8, 10, 11}), "a range removes those rows too");
+    checks.setAll(false);
+    check(checks.drawnList(-1).empty() && checks.drawnList(6) == std::vector<int>{6}, "SELECT NONE draws nothing but the selected row");
+    checks.setAll(true);
+    check(checks.drawnList(-1).size() == 12, "SELECT ALL draws everything again");
+
+    check(sceneFingerprint(out.scene) == before && out.result.rows.size() == rowsBefore, "the result set and its flybys were never touched");
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    neo::NeoOutcome extra;
+    check(service.latestSerial() == serial && !service.busy() && !service.poll(extra),
+          "no NeoService query was submitted, run or delivered", "serial " + std::to_string(service.latestSerial()) + " vs " + std::to_string(serial));
+
+    // A second query is a new result: the application resets the checkboxes for it.
+    service.submit(q, neo::EarthViewScale());
+    check(waitFor([&] { return service.poll(extra); }) && service.latestSerial() == serial + 1, "RUN is the only thing that queries");
+    checks.setAll(false);
+    checks.reset(extra.scene.flybys.size());
+    check(checks.allChecked() && checks.size() == extra.scene.flybys.size(), "and a new result comes back fully checked");
+    std::filesystem::remove_all(dir, ec);
+}
+
 // --- the real dataset -----------------------------------------------------------------------------
 
 void testReal() {
@@ -709,6 +840,7 @@ int main() {
     testScene();
     testFilterState();
     testService();
+    testChecks();
     testReal();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

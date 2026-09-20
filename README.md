@@ -303,6 +303,7 @@ used to check visuals without a person at the screen:
 | `SOLSIM_EARTH=1` | Start in the Earth view (screenshots wait for the first NEO query result) |
 | `SOLSIM_NEO_TOPK=n`, `SOLSIM_NEO_MAXLD=ld`, `SOLSIM_NEO_PHA=1`, `SOLSIM_NEO_FROM/TO=YYYY-MM-DD` | The NEO FILTER of that first query |
 | `SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i` or `any` | Select / show as hovered result `i` |
+| `SOLSIM_NEO_CHECKS=none`, `first:N`, `every:N` | Start with only some NEO RESULTS rows checked (drawn) |
 | `SOLSIM_EARTH_ENTER=n`, `SOLSIM_EARTH_LEAVE=n` | Enter / leave the Earth view at frame `n` (with `SOLSIM_SELECT=EARTH`) |
 | `SOLSIM_NEOS=pha\|1000\|5000\|20000\|all\|result` | Turn the NEOS layer on with that preset; `SOLSIM_NEOS_LEGEND=distance\|pha\|diameter\|approach`, `SOLSIM_NEOS_SELECT=i`, `SOLSIM_NEOS_DIRECT=n` (propagate directly up to n objects; 0 = always on the worker) |
 | `SOLSIM_NEO_DB=path` | The NEO database (default: `data/neo.db` found above the executable) |

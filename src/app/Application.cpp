@@ -251,6 +251,7 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_NEOS=pha|1000|5000|20000|all|result   turn the NEOS layer on with that preset
 //   SOLSIM_NEOS_LEGEND=distance|pha|diameter|approach, SOLSIM_NEOS_SELECT=i (select the i-th drawn object)
 //   SOLSIM_NEOS_DIRECT=n   propagate directly up to n objects (default 2000; 0 = always on the worker)
+//   SOLSIM_NEO_CHECKS=none|first:N|every:N   which NEO RESULTS rows stay checked after the first query
 //   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
 //   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
@@ -297,6 +298,7 @@ void Application::applyDevHooks() {
     const std::string enterAt = envVar("SOLSIM_EARTH_ENTER"), leaveAt = envVar("SOLSIM_EARTH_LEAVE");
     devEnterFrame_ = enterAt.empty() ? -1 : std::atol(enterAt.c_str());
     devLeaveFrame_ = leaveAt.empty() ? -1 : std::atol(leaveAt.c_str());
+    devChecks_ = envVar("SOLSIM_NEO_CHECKS");
     const std::string devSel = envVar("SOLSIM_NEO_SELECT"), devHov = envVar("SOLSIM_NEO_HOVER");
     devSelect_ = devSel.empty() ? -1 : std::atoi(devSel.c_str());
     devHover_ = devHov.empty() ? -1 : (devHov == "any" ? -2 : std::atoi(devHov.c_str()));

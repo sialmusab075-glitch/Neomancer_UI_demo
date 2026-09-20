@@ -5,3 +5,13 @@
 *.user
 imgui.ini
 solsim.log
+
+# NEO data layer: generated database, raw JPL response cache, benchmark output.
+# Only the small fixtures under tests/fixtures/ are committed.
+/data/
+neo.db
+*.db-journal
+*.db-wal
+*.db-shm
+/bench-results/
+*.bench.csv

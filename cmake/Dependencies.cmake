@@ -44,6 +44,16 @@ FetchContent_Declare(implot
 # downloads them; the static targets are defined below.
 FetchContent_MakeAvailable(glfw glm imgui implot)
 
+# --- Vendored, committed dependencies (nothing is downloaded at build time) --
+#
+#   nlohmann/json 3.12.0   external/json/nlohmann/json.hpp  (MIT)
+#   SQLite        3.53.4   external/sqlite/sqlite3.c/.h  (public domain)
+#
+# Versions, sources and verified hashes are recorded in THIRD_PARTY.md. Both are
+# used only by the NEO data layer (src/neo), never by the renderer or the HUD.
+# WinHTTP is a Windows system library: it needs no package, and only the
+# networking target links it.
+
 # Silence warnings coming from third-party code.
 function(solsim_silence_target target)
     if(TARGET ${target})
@@ -85,3 +95,30 @@ add_library(implot STATIC
 target_include_directories(implot SYSTEM PUBLIC ${implot_SOURCE_DIR})
 target_link_libraries(implot PUBLIC imgui)
 solsim_silence_target(implot)
+
+# --- nlohmann/json (header only) --------------------------------------------
+# SYSTEM include: keeps its headers out of /W4 and -Wall output.
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json SYSTEM INTERFACE
+    ${PROJECT_SOURCE_DIR}/external/json)
+
+# --- SQLite amalgamation ----------------------------------------------------
+# Compile-time options:
+#   THREADSAFE=2        multi-thread: one connection per thread, never shared.
+#                       The ingest tool and the UI worker each open their own.
+#   DQS=0               no double-quoted string literals: a misspelt column is
+#                       an error instead of a silent string.
+#   OMIT_LOAD_EXTENSION no dynamic extension loading (we never use it).
+#   OMIT_DEPRECATED     drops the legacy API surface.
+#   DEFAULT_MEMSTATUS=0 skips the allocation bookkeeping we don't read.
+#   DEFAULT_FOREIGN_KEYS=1  approaches -> asteroids stays referentially sound.
+add_library(sqlite3 STATIC ${PROJECT_SOURCE_DIR}/external/sqlite/sqlite3.c)
+target_include_directories(sqlite3 SYSTEM PUBLIC ${PROJECT_SOURCE_DIR}/external/sqlite)
+target_compile_definitions(sqlite3 PUBLIC
+    SQLITE_THREADSAFE=2
+    SQLITE_DQS=0
+    SQLITE_OMIT_LOAD_EXTENSION
+    SQLITE_OMIT_DEPRECATED
+    SQLITE_DEFAULT_MEMSTATUS=0
+    SQLITE_DEFAULT_FOREIGN_KEYS=1)
+solsim_silence_target(sqlite3)

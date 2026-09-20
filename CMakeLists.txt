@@ -91,6 +91,16 @@ add_library(solsim_neo STATIC
     src/neo/dsa/AvlTree.h
     src/neo/dsa/BucketIndex.h
     src/neo/dsa/BucketIndex.cpp
+    src/neo/query/Query.h
+    src/neo/query/Query.cpp
+    src/neo/query/Histogram.h
+    src/neo/query/Histogram.cpp
+    src/neo/query/NameIndex.h
+    src/neo/query/NameIndex.cpp
+    src/neo/query/IndexSet.h
+    src/neo/query/IndexSet.cpp
+    src/neo/query/QueryEngine.h
+    src/neo/query/QueryEngine.cpp
     src/neo/ingest/ParseReport.h
     src/neo/ingest/ParseReport.cpp
     src/neo/ingest/SbdbParser.h
@@ -133,6 +143,16 @@ if(MINGW)
 endif()
 solsim_set_warnings(neo_ingest)
 set_target_properties(neo_ingest PROPERTIES FOLDER "neo")
+
+# Console query tool: runs one Query against data/neo.db and prints the results
+# table and the EXPLAIN. Reads the database only; never touches the network.
+add_executable(neo_query tools/neo_query/main.cpp)
+target_link_libraries(neo_query PRIVATE solsim_neo)
+if(MINGW)
+    target_link_options(neo_query PRIVATE -static)
+endif()
+solsim_set_warnings(neo_query)
+set_target_properties(neo_query PROPERTIES FOLDER "neo")
 
 # ---------------------------------------------------------------------------
 # Application
@@ -333,4 +353,18 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_dsa_tests)
     set_target_properties(neo_dsa_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_dsa_tests COMMAND neo_dsa_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Query engine: validation, same-row semantics, the planner, and the oracle
+    # (planned == fixed-order == naive for 10k+ random queries). Run from the
+    # project root so the real-dataset pass can find data/neo.db.
+    add_executable(neo_query_tests tests/neo_query_tests.cpp)
+    target_link_libraries(neo_query_tests PRIVATE solsim_neo)
+    target_compile_definitions(neo_query_tests PRIVATE
+        NEO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    if(MINGW)
+        target_link_options(neo_query_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_query_tests)
+    set_target_properties(neo_query_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_query_tests COMMAND neo_query_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

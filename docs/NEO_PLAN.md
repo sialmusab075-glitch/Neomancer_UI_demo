@@ -345,7 +345,7 @@ page size, and memory for the master vector and each index.
 | 3 | `neo_ingest`: real download, paging, cache, validation report | **done** (85 checks in `neo_ingest_tests`; one real run recorded below) |
 | 4 | SQLite schema + save/load + tests | **done** (79 checks in `neo_storage_tests`) |
 | 5 | DSA structures + unit tests | **done** (133 checks in `neo_dsa_tests`; study notes in `docs/DSA_NOTES.md`) |
-| 6 | Query engine + planner + oracle tests | not started |
+| 6 | Query engine + planner + oracle tests | **done** (298 checks in `neo_query_tests`; 12,200 random queries, 0 mismatches) |
 | 7 | `neo_bench` + CSV + results summary | not started |
 | 8 | UI hook | not started |
 
@@ -629,3 +629,242 @@ data it matches **0** approaches: the closest pass, 2025 UC11 at 0.0000441 au, i
 3-sigma minimum below one radius; all are poorly determined orbits far from their
 epoch, which is why the flag uses the nominal distance. Details in
 `docs/DSA_NOTES.md` section 6b.
+
+## 13. Query engine (stage 6, implemented)
+
+`src/neo/query/`, `tools/neo_query`, `tests/neo_query_tests.cpp`. Queries run on the
+in-memory structures from stage 5; **no query issues SQL**.
+
+### The API (what the NEO FILTER panel calls)
+
+```cpp
+neo::QueryEngine engine(dataset);
+engine.build();                          // once, after load; ~45 ms for 42k objects
+neo::Query q;                            // plain data, no parsing
+q.pha = neo::TriState::Yes;
+q.dateJd = neo::Range::between(jd2030, jd2040);
+q.distanceAU = neo::Range::atMost(5 * neo::kLunarDistanceAU);
+q.diameterKm = neo::Range::atLeast(0.14);
+q.sortBy = neo::SortField::Distance;  q.topK = 10;
+neo::QueryResult r = engine.run(q);      // const; safe from any thread
+// r.rows[i].object            -> index into dataset.records()
+// r.approachesBegin/End(row)  -> that object's MATCHING approach indices
+// r.totalObjects              -> matches before top-K ("showing 10 of 1,324")
+// r.stats.explain()           -> the plan, as text
+```
+
+- `Query` holds **object filters** (designation, name prefix, kind, NEO/PHA
+  tri-state, orbit classes, diameter + mode, H, MOID, a, e, i) and **approach
+  filters** (date, distance, v_rel, grazing), then sort field, direction and top-K.
+  Units are fixed: JD (TDB), AU, km/s, km, degrees. `kLunarDistanceAU` converts LD.
+- **Bounds are inclusive.** A range with `lo > hi`, or a NaN bound, is a
+  **validation error** (`validate()` returns one message per problem, and `run()`
+  refuses the query) rather than an empty result.
+- `engine.findDesignation()`, `findSpkId()` and `searchNames(prefix, limit)` serve the
+  search box. `engine.buildReport()` lists every index with its build time and memory.
+- **Thread safety:** `build()` finishes first; after that every method is `const` and
+  touches only immutable indexes and locals, so any number of threads may `run()`
+  concurrently. A test runs 4 threads x 900 queries and compares with sequential
+  answers.
+
+### Semantics
+
+1. **Same-row.** All approach conditions apply to ONE approach row. An object
+   matches only if a single approach satisfies every approach condition; two
+   different approaches, one meeting the distance limit and the other the velocity
+   limit, never combine. A hand-built case (`X`: close-but-fast and far-but-slow)
+   verifies this on every access path.
+2. **Result = objects plus their matching approaches.** Sorting by an approach field
+   uses the object's best MATCHING approach (minimum ascending, maximum descending).
+   With no approach condition, an object matches on its own properties and all its
+   approaches are listed (possibly none).
+3. **Unknown is never zero.** A range on H, MOID or diameter never matches an unknown
+   value. Tri-state flags: unknown matches neither `Yes` nor `No`.
+4. **Diameter modes:** `MeasuredOnly`, `MeasuredOrEstimated` (default), and
+   `IncludeUnknown` (as the latter, and objects with no diameter at all also match).
+   The mode also decides which diameter a diameter sort reads.
+5. **Ordering is total and deterministic.** Unknown sort keys go last in both
+   directions; ties break by object index ascending. `topK` uses the heap, and its
+   result equals the prefix of the full sort.
+6. **Name search** matches the name OR the designation, case-insensitively, by
+   prefix. Exact designation is case-sensitive and goes through the hash map.
+
+### Three execution paths, one answer
+
+| Path | What it does |
+|---|---|
+| **Naive** | A full linear scan reading the records directly. The oracle: no shared index, no shared column, no shared sorting code (it sorts with `std::stable_sort`, so it also checks my merge sort and heap on every query). |
+| **Fixed-order** | Uses the indexes but always drives from the first present predicate in a fixed priority (designation, name, date, distance, v_rel, diameter, H, MOID, a, e, i); residuals in declaration order. The benchmark baseline for the planner. |
+| **Planned** | Statistics-driven, described below. |
+
+`run(query, mode, force)` also accepts a forced access path, so every structure is
+checked against the naive scan even when the planner would never choose it.
+
+### Query planner
+
+**Statistics** (built with the indexes, free of extra sorting because they are read
+off arrays that are already sorted):
+
+- an **equi-depth histogram, 64 bins**, for each of 10 numeric fields (diameter x2, H,
+  MOID, a, e, i, date, distance, v_rel). Unknown values are excluded from the bins and
+  the known fraction scales every estimate, so unknowns never inflate one.
+- **exact counts** for the categorical predicates (kind, NEO, PHA, orbit class, grazing).
+- **exact** candidate counts where the structure can give them in O(log n) or O(1): the
+  name index (two binary searches), the size and year buckets, the hash map.
+
+**Access paths considered** (each an alternative way to produce candidates):
+
+| Access | Serves | Exact? | Per-candidate cost |
+|---|---|---|---|
+| hash lookup | exact designation | yes | 1.0 |
+| name index | name/designation prefix | yes | 1.5 |
+| sorted view (object) | diameter, H, MOID, a, e, i | yes | 1.0 |
+| size buckets | diameter (the only path for `IncludeUnknown`) | superset | 0.8 |
+| AVL tree | date | yes | 2.5 |
+| year buckets | date | superset | 0.8 |
+| sorted view (approach) | distance, v_rel, grazing | yes | 1.0 |
+| scan objects / approaches | anything | yes | 0.5 |
+
+A **superset** path (buckets) over-reads and then re-checks its own predicate as the
+first residual, so it stays exactly correct.
+
+**Cost model.** Every predicate has a unit cost (a range test on a dense column 1.0, a
+class or diameter test 1.5, a name-prefix test 4.0). A residual chain applies its
+predicates in order of **rejection per unit cost**, `(1 - selectivity) / cost`, highest
+first; its expected cost per input row is `sum_j cost_j * prod_{k<j} sel_k`, and its
+pass fraction is the product of the selectivities. For a driver producing `m` candidates:
+
+```
+object-driven:    work = m*access + m*objChain.cost
+                       + m*objChain.pass * avgApproaches * appChain.cost   (if approach conditions)
+approach-driven:  work = m*access + m*appChain.cost
+                       + m*appChain.pass * (0.5 + objChain.cost)           (parent-object fetch)
+```
+
+The planner enumerates every applicable driver (including the two scans), estimates
+its work, and takes the cheapest (ties: fewer candidates, then access-path order). It
+then orders the residuals for that choice. `docs/DSA_NOTES.md` section 8 works one
+example through by hand.
+
+**Assumption to state in the report:** selectivities are combined by multiplication,
+which assumes the predicates are independent. Real fields correlate (small H implies a
+large diameter), so combined estimates can be off; the *driver* choice depends mostly on
+the single most selective predicate, which is estimated directly, so it is robust to
+that.
+
+### EXPLAIN
+
+Every result carries its plan: the driver, estimated vs actual candidates (with the
+estimate error), each residual predicate in execution order with its estimated and
+actual selectivity and how many times it ran, the alternatives the planner weighed
+with their estimated work (chosen one marked), totals, and time. Real examples on
+the 42,666-object / 42,819-approach dataset:
+
+```
+$ neo_query --pha --from 2030-01-01 --to 2040-01-01 --max-dist-ld 5 --min-diam 0.14 --top 10 --sort dist --explain
+
+EXPLAIN (planned)
+  query       pha=yes | diameter [0.14, -] km (measured or H-estimate) | date 2030-01-01..2040-01-01 | dist [-, 0.0128478] au | sort dist asc | top 10
+  driver      year buckets overlapping [2030-01-01, 2040-01-01]
+              year buckets access, superset (the predicate is re-checked); estimated 1446 candidates, actual 1,446
+  steps       1. date [2030-01-01, 2040-01-01]   [approach row]
+                   est selectivity 0.0311, unit cost 1.0 | evaluated 1,446, passed 1,324 (actual 0.9156)
+              2. dist [-, 0.0128478] au   [approach row]
+                   est selectivity 0.2163, unit cost 1.0 | evaluated 1,324, passed 123 (actual 0.0929)
+              3. pha = yes   [object]
+                   est selectivity 0.0597, unit cost 1.0 | evaluated 123, passed 10 (actual 0.0813)
+              4. diameter [0.14, -] km (measured or H-estimate)   [object]
+                   est selectivity 0.2760, unit cost 1.5 | evaluated 10, passed 10 (actual 1.0000)
+  considered  * est work       2663, est      1446 candidates  year buckets overlapping [2030-01-01, 2040-01-01]
+                est work       5122, est      1333 candidates  AVL tree: date [2030-01-01, 2040-01-01]
+                est work      18981, est      9261 candidates  sorted view: approach distance [-, 0.0128478] au
+                est work      22548, est     11826 candidates  size buckets overlapping diameter [0.14, -]
+                est work      24275, est     11774 candidates  sorted view: diameter [0.14, -] (measured or estimate)
+                est work      66019, est     42819 candidates  full scan of all approaches
+                est work      68550, est     42666 candidates  full scan of all objects
+  work        candidates examined 1,446, predicate evaluations 2,903
+  result      10 objects (10 approaches) matched; 10 returned
+  time        plan 0.016 ms + execute 0.030 ms = 0.053 ms
+```
+
+Where the planner and the fixed order disagree: a **rare distance** with a date window
+covering everything (`--max-dist-au 0.0005 --from 1950-01-01 --to 2149-12-31`):
+
+| Path | Driver | Time |
+|---|---|---|
+| naive | full scan of all objects | 0.896 ms |
+| fixed-order | AVL tree on the date (42,819 candidates) | 0.580 ms |
+| **planned** | **sorted view on distance (231 candidates)** | **0.031 ms** |
+
+The planner's estimate there was 287 candidates against 231 actual (-19.4%): the
+histogram is coarsest where the data is densest near zero, and the estimate error is
+printed rather than hidden. Where scanning is genuinely right (`--pha --class ATE`: two
+flag tests, no index), the planner says so: `full scan of all objects`, 42,666
+candidates, estimate exact.
+
+### Index build report (real dataset, from `neo_query --info`)
+
+| Index | Entries | MB | Build ms |
+|---|---:|---:|---:|
+| columns (fields as dense arrays) | 85,485 | 3.462 | 2.4 |
+| hash map: designation -> record | 42,666 | 2.500 | 2.1 |
+| hash map: SPK-ID -> record | 42,666 | 2.500 | 1.9 |
+| name index (sorted, prefix search) | 43,055 | 1.642 | 3.9 |
+| sorted view: diameter (measured) | 1,264 | 0.014 | 0.1 |
+| sorted view: diameter (measured or estimate) | 42,477 | 0.486 | 2.7 |
+| sorted view: H | 42,456 | 0.486 | 2.9 |
+| sorted view: MOID | 42,535 | 0.487 | 3.0 |
+| sorted view: a / e / i (each) | 42,666 | 0.488 | 2.8-2.9 |
+| sorted view: approach distance / v_rel (each) | 42,819 | 0.490 | 3.0-3.3 |
+| AVL tree: approach date | 42,819 | 0.980 | 5.2 |
+| size buckets (measured / measured or estimate) | 42,666 | 0.163 each | 0.4 / 2.3 |
+| year buckets (approaches) | 42,819 | 0.165 | 1.4 |
+| equi-depth histograms (10 fields x 64 bins) | 640 | 0.005 | 0.4 |
+| **total** | | **15.5** | **~43** |
+
+The two hash maps are the largest single items (2.5 MB each for 42,666 entries,
+~58 B per entry) because each slot stores its `std::string` key inline. That is the
+first thing the stage 7 memory experiment should look at: keying the slots by record
+index and comparing against the record would cut both maps to a few hundred KB.
+
+### Stage 6 — decisions recorded (for veto)
+
+1. **Default diameter mode is `MeasuredOrEstimated`.** Only 1,264 of 42,666 objects
+   have a measured diameter, so a measured-only default makes "diameter >= 140 m"
+   nearly empty. Estimates are derived from H with p = 0.14 (a factor of ~2 either
+   way), so the CLI marks them `~` and `MeasuredOnly` is one flag away.
+2. **Approach distance is the nominal `dist`**, not the 3-sigma minimum, consistent
+   with the grazing flag (65 rows have a 3-sigma minimum inside the Earth; all are
+   poorly determined orbits).
+3. **A name search matches the name or the designation.**
+4. **Approach-field sort** uses the best matching approach, so "closest approaches in
+   2030-2040" ranks objects by their closest approach *within that window*.
+5. **Unknown sort keys are last in both directions**; ties by object index.
+6. `IncludeUnknown` is served only by the size buckets (an index range cannot include
+   the unknowns), and the planner knows it.
+
+### Stage 6 — tests
+
+`neo_query_tests`: **298 checks, 15 s**, including:
+
+- validation (`lo > hi`, NaN, several errors at once, querying before `build()`)
+- semantics on a hand-built dataset with known answers, each run on **every** path:
+  the three diameter policies, boundary-equal values, tri-state flags, classes,
+  designation and prefix, grazing, date windows, combined filters, sort with ties and
+  unknown keys, top-K
+- the same-row cases (dist AND v_rel, date AND v_rel, three conditions, a fourth added)
+- histogram estimates (uniform, unknown fraction, a 60% point mass, empty, single value)
+- planner driver choices, EXPLAIN content, and estimate quality: over 1,200 random
+  ranges the histogram's **mean error is 0.56% of the rows, worst 2.86%**
+- **the oracle: 12,200 random queries** (1,500 on the fixtures, 10,000 on synthetic
+  data full of ties, unknowns and boundary values, 700 on the real `neo.db`), each run
+  as naive, fixed-order, planned and **all nine access paths forced** -- about 146,000
+  engine runs -- with **0 mismatches**. Coverage is asserted: every access path drove
+  at least one query, results are a healthy mix of empty and non-empty, and top-K
+  truncation is exercised
+- 4 threads x 900 queries against the sequential answers
+
+**The oracle can fail.** A mutation check broke the engine four ways -- size buckets
+skipping their top bucket, objects with no matching approach being kept, year buckets
+reading one year short, and one range boundary made exclusive -- and the suite failed
+each time (3 to 16 failing checks), then passed again once the engine was restored.

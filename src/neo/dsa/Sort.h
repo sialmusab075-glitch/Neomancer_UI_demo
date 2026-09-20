@@ -187,6 +187,27 @@ std::size_t upperBound(const double* keys, std::size_t n, double value, Counters
     return low;
 }
 
+// First position in [0, n) for which isBefore(position) is false, given that
+// isBefore is true for a prefix of the range and false afterwards. This is the
+// same halving loop as lowerBound, for keys that are not doubles (strings).
+// O(log n) calls of isBefore.
+template <class IsBefore>
+std::size_t partitionPoint(std::size_t n, const IsBefore& isBefore) {
+    std::size_t low = 0;
+    std::size_t count = n;
+    while (count > 0) {
+        const std::size_t step = count / 2;
+        const std::size_t mid = low + step;
+        if (isBefore(mid)) {
+            low = mid + 1;
+            count -= step + 1;
+        } else {
+            count = step;
+        }
+    }
+    return low;
+}
+
 inline std::size_t lowerBound(const double* keys, std::size_t n, double value) {
     NullCounters counters;
     return lowerBound(keys, n, value, counters);
@@ -226,6 +247,10 @@ struct SortedView {
         const std::size_t begin = lowerBound(keys.data(), keys.size(), lo);
         const std::size_t end = upperBound(keys.data(), keys.size(), hi);
         return {begin, end};
+    }
+
+    std::size_t memoryBytes() const {
+        return order.capacity() * sizeof(std::uint32_t) + keys.capacity() * sizeof(double);
     }
 
     bool sortedAscending() const {

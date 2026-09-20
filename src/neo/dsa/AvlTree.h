@@ -105,6 +105,7 @@ public:
     std::size_t size() const { return size_; }
     bool        empty() const { return size_ == 0; }
     int         height() const { return heightOf(root_); }
+    std::size_t memoryBytes() const { return nodes_.capacity() * sizeof(Node); }
 
     // fn(const Key&, Payload) over every entry, ascending.
     template <class Fn>

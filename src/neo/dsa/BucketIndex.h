@@ -85,6 +85,7 @@ public:
 
     DiameterPolicy policy() const { return policy_; }
     std::size_t    size() const { return indices_.size(); }
+    std::size_t    memoryBytes() const { return indices_.capacity() * sizeof(std::uint32_t) + sizeof(offsets_); }
 
     // The record indices in one bucket: a contiguous slice of the flat array.
     const std::uint32_t* begin(SizeBucket bucket) const;
@@ -113,6 +114,9 @@ public:
     int         firstYear() const { return firstYear_; }
     int         lastYear() const { return lastYear_; }
     std::size_t size() const { return indices_.size(); }
+    std::size_t memoryBytes() const {
+        return indices_.capacity() * sizeof(std::uint32_t) + offsets_.capacity() * sizeof(std::size_t);
+    }
     std::size_t yearCount() const { return offsets_.empty() ? 0 : offsets_.size() - 1; }
 
     // Approach indices in one year.

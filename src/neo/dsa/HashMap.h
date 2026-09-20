@@ -166,6 +166,9 @@ public:
     std::size_t size() const { return size_; }
     bool        empty() const { return size_ == 0; }
     std::size_t capacity() const { return slots_.size(); }
+    // Bytes held by the slot array (string keys short enough for the small-string
+    // optimisation, as designations are, own no further heap memory).
+    std::size_t memoryBytes() const { return slots_.capacity() * sizeof(Slot); }
     double loadFactor() const {
         return slots_.empty() ? 0.0 : static_cast<double>(size_) / static_cast<double>(slots_.size());
     }

@@ -560,3 +560,129 @@ false alarms, which is why the flag uses the nominal distance.
 All five are already driven side by side with those `std::` containers in the
 differential tests, which is what makes the stage 7 comparison meaningful: the
 structures are known to be *correct* before they are measured.
+
+---
+
+## 8. How the query planner picks a driver
+
+`src/neo/query/QueryEngine.cpp`. The planner does not run a query differently
+depending on the data; it chooses **which index to read candidates from**, and in what
+order to apply the remaining conditions. The answer is identical either way (the
+oracle tests prove it); only the work changes.
+
+### The idea in one paragraph
+
+Every condition in a query is a filter with a *selectivity* (the fraction of rows it
+lets through) and a *cost* (how expensive one test is). One condition, if it has an
+index, can be used to *produce* the candidates instead of testing them: that is the
+**driver**. The rest become *residuals*, tested on whatever the driver produces. A
+good driver is one that produces few candidates cheaply, so the planner prices every
+possible driver and takes the cheapest.
+
+### Estimating selectivity without running the filter
+
+An **equi-depth histogram** (`src/neo/query/Histogram.h`) has 65
+edges such that each of the 64 bins holds the same number of rows. To estimate
+`lo <= x <= hi`, read off the fraction of rows below `hi` and below `lo` from the
+edges (interpolating inside a bin) and subtract. Two binary searches, no scan.
+
+Worked on a toy field of 16 values, 4 bins (so each bin holds 4 values):
+
+```
+16 values, sorted (index 0..15):
+    1  1  2  3  3  4  5  9  9  10  12  20  21  30  50  90
+
+edge k is the value at rank k*(16-1)/4, i.e. ranks 0, 3, 7, 11, 15:
+    edges = [ 1, 3, 9, 20, 90 ]        bin 0 = [1,3]  bin 1 = [3,9]  bin 2 = [9,20]  bin 3 = [20,90]
+
+estimate  5 <= x <= 12 :
+   fraction <= 12 : 12 lies in bin 2 = [9,20], (12-9)/(20-9) = 0.273 of the way
+                    -> (2 whole bins + 0.273) / 4 = 0.568
+   fraction <  5  : 5 lies in bin 1 = [3,9],   (5-3)/(9-3)   = 0.333 of the way
+                    -> (1 whole bin  + 0.333) / 4 = 0.333
+   estimate = 0.568 - 0.333 = 0.235          (actual: 5, 9, 9, 10, 12 = 5 of 16 = 0.3125)
+```
+
+The estimate is off by 0.08 here, under one bin (0.25) because there are only four
+bins. With 64 bins the error is bounded by about one bin, 1/64 or ~1.6% of the rows,
+wherever the range falls, because every bin holds the same share. That is why it is
+equi-*depth*: a fixed-width histogram would put nearly all 42,819 approach distances in
+one bin.
+
+### Pricing a driver
+
+For a driver that yields `m` candidates at `access` cost each, the work is the cost of
+producing them plus the residual chains applied to them. Residuals run in order of
+**rejection per unit cost**, `(1 - sel) / cost`: cheap, selective tests first, so most
+candidates are discarded before an expensive test is reached.
+
+### Worked example (the real demo query)
+
+```
+neo_query --pha --from 2030-01-01 --to 2040-01-01 --max-dist-ld 5 --min-diam 0.14
+```
+
+Four conditions, with the planner's estimated selectivities and unit costs:
+
+| Condition | Universe | Selectivity | Unit cost |
+|---|---|---:|---:|
+| date 2030-2040 | approach | 0.0311 | 1.0 |
+| dist <= 0.01285 au | approach | 0.2163 | 1.0 |
+| pha = yes | object | 0.0597 | 1.0 |
+| diameter >= 0.14 (measured or estimate) | object | 0.2760 | 1.5 |
+
+Two of the candidate drivers, priced by hand:
+
+**Driver A: year buckets** (approach side; a superset, so `date` stays a residual).
+The buckets for 2030..2040 hold `m = 1446` approaches; access cost 0.8.
+
+```
+approach residuals, ranked:   date  (1-.0311)/1 = 0.969     dist (1-.2163)/1 = 0.784
+     -> order date, dist          cost = 1 + 0.0311*1        = 1.0311
+                                  pass = 0.0311 * 0.2163     = 0.006727
+object residuals, ranked:     pha   (1-.0597)/1 = 0.940     diameter (1-.276)/1.5 = 0.483
+     -> order pha, diameter       cost = 1 + 0.0597*1.5      = 1.0896
+                                  pass = 0.0597 * 0.276      = 0.01648
+
+work = m*access            = 1446 * 0.8                     = 1156.8
+     + m*appChain.cost     = 1446 * 1.0311                  = 1491.0
+     + m*appChain.pass*(0.5 + objChain.cost)
+                           = 1446 * 0.006727 * (0.5+1.0896) =   15.5
+     = 2663
+```
+
+**Driver B: AVL tree** (approach side; *exact*, so `date` is dropped from the chain).
+`m = 1333`; access cost 2.5 (pointer-chasing walk).
+
+```
+approach residuals: dist only    cost 1.0     pass 0.2163
+work = 1333 * 2.5  = 3332.5
+     + 1333 * 1.0  = 1333.0
+     + 1333 * 0.2163 * (0.5 + 1.0896) = 458.3
+     = 5124      (EXPLAIN prints 5122: the estimate is 1332.6 candidates, not 1333)
+```
+
+The planner's other options for this query cost 18,981 (sorted view on distance:
+9,261 candidates), 22,548 (size buckets), 24,275 (diameter view), 66,019 and 68,550
+(the two full scans). **Year buckets win at 2,663**, and the residual order printed by
+EXPLAIN is exactly the ranked order above: date, dist, pha, diameter.
+
+The estimate and the truth agree closely: 1,446 candidates estimated (exact, from the
+bucket counts), 1,324 of them pass the date test (the buckets over-read whole years),
+123 pass distance, 10 pass PHA, and the diameter test keeps all 10.
+
+Why the AVL tree loses even though it is exact and reads fewer candidates (1,333 vs
+1,446): each candidate costs 2.5 to walk out of the tree against 0.8 out of a bucket, a
+gap larger than the 8% saving in candidates. The tree wins when the window falls
+*inside* one year and the buckets would over-read: a test asserts exactly that (a
+year-aligned window picks the buckets, a ten-day window picks the tree).
+
+### What the planner cannot do
+
+- It multiplies selectivities, which assumes the conditions are independent. Small H
+  and large diameter are correlated, so a combined estimate can be off; the *driver*
+  choice depends mostly on the single most selective condition, which is estimated
+  directly.
+- Its unit costs are relative weights, not measured times. They rank plans correctly
+  when the plans differ by a large factor, which is when the choice matters.
+- It chooses per query and remembers nothing: there is no plan cache.

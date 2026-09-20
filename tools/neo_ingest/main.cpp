@@ -7,10 +7,16 @@
 
 #include "neo/ingest/Fetcher.h"
 #include "neo/ingest/Ingestor.h"
+#include "neo/ingest/CadParser.h"
 #include "neo/ingest/ResponseCache.h"
+#include "neo/ingest/SbdbParser.h"
 #include "neo/model/Dataset.h"
+#include "neo/model/Hash.h"
 #include "neo/net/WinHttpClient.h"
+#include "neo/storage/Database.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +36,9 @@ void printUsage() {
         "  --cache-dir DIR       raw response cache (default: <data-dir>/cache)\n"
         "  --offline             never use the network; run entirely from the cache\n"
         "  --refresh             ignore cached responses and download again\n"
+        "  --rebuild-db          rebuild neo.db from the cache, no network (implies --offline)\n"
+        "  --no-db               do not write neo.db\n"
+        "  --check-db N          after writing, load neo.db N times and report the median\n"
         "  --no-resume           ignore the progress file and start from the beginning\n"
         "\n"
         "What to fetch\n"
@@ -87,6 +96,8 @@ int main(int argc, char** argv) {
     neo::FetchPolicy policy;
     neo::WinHttpClient::Options httpOptions;
     bool quiet = false;
+    bool writeDb = true;
+    std::size_t checkDbLoads = 0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -101,6 +112,14 @@ int main(int argc, char** argv) {
             if (!nextValue(argc, argv, i, "--cache-dir", cacheDir)) return 2;
         } else if (arg == "--offline") {
             mode = neo::CacheMode::Offline;
+        } else if (arg == "--rebuild-db") {
+            // Everything needed is already cached, so this needs no network.
+            mode = neo::CacheMode::Offline;
+            writeDb = true;
+        } else if (arg == "--no-db") {
+            writeDb = false;
+        } else if (arg == "--check-db") {
+            if (!nextSize(argc, argv, i, "--check-db", checkDbLoads)) return 2;
         } else if (arg == "--refresh") {
             mode = neo::CacheMode::Refresh;
         } else if (arg == "--no-resume") {
@@ -179,6 +198,59 @@ int main(int argc, char** argv) {
     neo::Dataset dataset;
     neo::IngestReport report;
     const bool ok = ingestor.run(dataset, report);
+
+    // Persist the dataset. Only a complete, successful run may replace neo.db:
+    // a half-downloaded dataset would look authoritative while missing rows.
+    const std::string dbPath = dataDir + "/neo.db";
+    if (ok && writeDb) {
+        neo::DatabaseMeta meta;
+        meta.sbdbApiVersion =
+            report.sbdb.signatureVersion.empty() ? neo::kSbdbApiVersion : report.sbdb.signatureVersion;
+        meta.cadApiVersion = report.cad.signatureVersion.empty() ? neo::kCadApiVersion : report.cad.signatureVersion;
+        meta.cadDateMin = report.cadDateMin;
+        meta.cadDateMax = report.cadDateMax;
+        meta.cadDistMaxAU = report.cadDistMaxAU;
+        meta.reportChecksum = neo::fnv1a64Hex(report.toJson()); // ties the file to this run
+
+        const auto dbStarted = std::chrono::steady_clock::now();
+        const neo::DbStatus status = neo::saveDatabase(dataset, meta, dbPath);
+        report.dbWriteSeconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - dbStarted).count();
+        if (!status) {
+            std::printf("error writing %s: %s\n", dbPath.c_str(), status.error.c_str());
+            return 1;
+        }
+        report.dbPath = dbPath;
+        report.dbBytes = neo::databaseFileSize(dbPath);
+        std::printf("\nneo.db: %zu objects, %zu approaches, %.2f MB in %.2f s\n", dataset.objectCount(),
+                    dataset.approachCount(), static_cast<double>(report.dbBytes) / (1024.0 * 1024.0),
+                    report.dbWriteSeconds);
+    }
+
+    // Load it back: both a check that the file is readable and the load-time
+    // number quoted in the plan. The median of N runs, not the best or the mean.
+    if (ok && checkDbLoads > 0) {
+        std::vector<double> times;
+        times.reserve(checkDbLoads);
+        for (std::size_t run = 0; run < checkDbLoads; ++run) {
+            neo::Dataset loaded;
+            neo::DatabaseMeta meta;
+            const auto loadStarted = std::chrono::steady_clock::now();
+            const neo::DbStatus status = neo::loadDatabase(dbPath, loaded, meta);
+            const double seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - loadStarted).count();
+            if (!status) {
+                std::printf("error loading %s: %s\n", dbPath.c_str(), status.error.c_str());
+                return 1;
+            }
+            times.push_back(seconds);
+            std::printf("load %zu/%zu: %zu objects, %zu approaches in %.3f s\n", run + 1, checkDbLoads,
+                        loaded.objectCount(), loaded.approachCount(), seconds);
+        }
+        std::sort(times.begin(), times.end());
+        std::printf("median load time: %.3f s over %zu loads (file %.2f MB)\n", times[times.size() / 2],
+                    times.size(), static_cast<double>(neo::databaseFileSize(dbPath)) / (1024.0 * 1024.0));
+    }
 
     std::string error;
     if (!neo::writeIngestReports(report, dataDir, error)) {

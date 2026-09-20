@@ -26,6 +26,12 @@ JPL SBDB + CAD (JSON over HTTPS)
 
 Hard rules:
 
+- **SQLite is storage only.** `neo.db` is how the dataset survives between runs,
+  and nothing more. Every query in stage 6 runs on the in-memory DSA structures;
+  no part of the query path issues SQL. SQLite may reappear in `neo_bench` as a
+  baseline to measure my structures against, and nowhere else. The schema
+  therefore carries only the indexes integrity needs (primary keys and the
+  UNIQUE designations) and no query indexes.
 - The UI never parses JSON and never touches the network. It calls the query layer.
 - One master `std::vector<AsteroidRecord>`. Every index stores `std::uint32_t`
   positions into it, never copies of records.
@@ -337,7 +343,7 @@ page size, and memory for the master vector and each index.
 | 1 | Plan + dependencies + licences | **done** |
 | 2 | Model + JSON parsing from fixtures + tests | **done** (97 checks in `neo_tests`) |
 | 3 | `neo_ingest`: real download, paging, cache, validation report | **done** (85 checks in `neo_ingest_tests`; one real run recorded below) |
-| 4 | SQLite schema + save/load + tests | not started |
+| 4 | SQLite schema + save/load + tests | **done** (79 checks in `neo_storage_tests`) |
 | 5 | DSA structures + unit tests | not started |
 | 6 | Query engine + planner + oracle tests | not started |
 | 7 | `neo_bench` + CSV + results summary | not started |
@@ -458,3 +464,97 @@ The first attempt failed on the 1960–1965 window after 5 attempts of HTTP 502.
 Re-running with `--max-attempts 8` resumed from the progress mark, replayed the
 completed pages from the cache and finished — which is the resume path working
 on the live API rather than only in a test.
+
+## 11. Storage (stage 4, implemented)
+
+`src/neo/storage/Database.{h,cpp}` is the only code that speaks SQL.
+
+### Schema (version 1)
+
+```
+meta        one row (id = 1): schema_version, created_utc, sbdb/cad API versions,
+            cad_date_min/max, cad_dist_max_au, object_count, approach_count,
+            report_checksum
+objects     id INTEGER PK, pdes TEXT NOT NULL UNIQUE, spkid TEXT UNIQUE,
+            name, full_name, kind, numbered, is_neo, is_pha, orbit_class,
+            orbit_id, epoch_jd, e, a_au, q_au, i_deg, om_deg, w_deg, ma_deg,
+            n_deg_per_day, period_days, moid_au, condition_code,
+            h_mag, diameter_km, diameter_sigma_km, albedo, rot_per_hours,
+            est_diameter_km
+approaches  id INTEGER PK, object_id INTEGER NOT NULL REFERENCES objects(id),
+            jd, dist_au, dist_min_au, dist_max_au, dist_range_derived,
+            v_rel_kms, v_inf_kms, h_mag, diameter_km, diameter_sigma_km
+```
+
+- `PRAGMA foreign_keys = ON` on both write and read.
+- Everything optional is a **nullable column**: unknown stays NULL, never 0 or
+  "". `is_neo` / `is_pha` are nullable integers, so the three states
+  (yes / no / not asserted) survive. An object with no SPK-ID stores NULL rather
+  than "", so `UNIQUE` tolerates any number of them.
+- **Measured and estimated diameters are separate columns**
+  (`diameter_km`, `est_diameter_km`) and are never merged. The estimate is
+  written for anyone querying the file directly but recomputed on load, so H and
+  albedo remain the single source of truth.
+- `dist_range_derived` records the `dist_min`/`dist_max` fallback per row.
+- **No query indexes**, asserted by a test that reads `sqlite_master` and
+  requires every index to be a `sqlite_autoindex_` (a UNIQUE constraint).
+
+### Atomic writes
+
+1. Build `neo.db.tmp` — schema, then one `BEGIN IMMEDIATE` transaction with
+   prepared statements for every row.
+2. Verify **inside the temp file**: row counts against the dataset, then
+   `PRAGMA foreign_key_check`.
+3. Swap: move the old file to `neo.db.old`, rename the temp into place, delete
+   the old one; a failed rename puts the old file back.
+
+Any failure deletes the temp file and leaves the previous `neo.db` untouched.
+The cleanup happens after the SQLite connection is closed, because Windows
+refuses to delete an open file — the first version leaked a temp file on every
+failure path, which the interrupted-write test caught.
+
+The temp file uses `journal_mode = OFF` and `synchronous = OFF`: it is
+disposable, so durability pragmas there would only cost time. Safety comes from
+the swap, not from the journal.
+
+### Load
+
+`loadDatabase` fills the master record vector and the flat approach vector with
+per-object ranges, exactly the in-memory model: objects in `id` order, then
+approaches resolved through an id -> index table, then one sort that rebuilds
+every range (`Dataset::setApproaches`, sharing the invariant with the join). A
+row count that disagrees with the meta row, or an approach with no parent, fails
+the load rather than producing a quietly wrong dataset.
+
+A `schema_version` this build does not know is refused with the version numbers
+and the fix: re-run `neo_ingest` (`--rebuild-db` rebuilds from the cache
+without any network).
+
+### Stage 4 — decisions recorded
+
+1. SQLite is storage only (see the hard rules); the query path never issues SQL.
+2. Object ids are 1-based and dense, assigned from the record order, so the
+   round trip preserves record order without storing it.
+3. `est_diameter_km` is stored but not read back: derived data has one owner.
+4. `neo_ingest` writes `neo.db` **only after a completely successful run** — a
+   half-downloaded dataset must never look authoritative. `--rebuild-db`
+   rebuilds it offline from the cache; `--no-db` skips it; `--check-db N` loads
+   it back N times and reports the median.
+5. The meta row stores the FNV-1a checksum of the run's `ingest_report.json`, so
+   a database can be traced back to the validation numbers that produced it.
+
+### Stage 4 — the real dataset
+
+`neo_ingest --rebuild-db --check-db 5` (rebuilt offline from the cache, 53 cache
+hits, 0 requests):
+
+| Measure | Value |
+|---|---|
+| Rows | 42,666 objects + 42,819 approaches |
+| File size | **12.30 MB** (12,902,400 bytes) |
+| Write time | 0.13 s |
+| Load time | **0.052 s median** of 5 loads (0.048–0.056 s) |
+
+That is ~0.6 us per row to go from the file to the in-memory model with ranges
+rebuilt, which is the baseline the stage 7 ingestion/memory experiments compare
+against.

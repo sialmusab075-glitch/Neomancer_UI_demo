@@ -77,6 +77,7 @@ std::string IngestReport::toJson() const {
                     {"estimated_diameters", estimatedDiameters},
                     {"no_diameter", noDiameterAtAll}};
 
+    j["database"] = {{"path", dbPath}, {"bytes", dbBytes}, {"write_seconds", dbWriteSeconds}};
     j["fetch"] = {{"requests", fetch.requests},
                   {"cache_hits", fetch.cacheHits},
                   {"retries", fetch.retries},
@@ -126,6 +127,13 @@ std::string IngestReport::toText() const {
                   objects, approaches, objectsWithoutApproaches, unpropagatable, measuredDiameters,
                   estimatedDiameters, noDiameterAtAll);
     out += buf;
+
+    if (!dbPath.empty()) {
+        out += section("Database");
+        std::snprintf(buf, sizeof buf, "%s\n%.2f MB written in %.2f s\n", dbPath.c_str(),
+                      static_cast<double>(dbBytes) / (1024.0 * 1024.0), dbWriteSeconds);
+        out += buf;
+    }
 
     out += section("Fetch");
     std::snprintf(buf, sizeof buf,

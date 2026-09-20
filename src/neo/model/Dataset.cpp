@@ -85,16 +85,36 @@ JoinReport Dataset::joinApproaches(std::vector<ParsedApproach>&& rows) {
         report.unmatchedSamples.emplace_back(entry.first, entry.second);
     }
 
-    // Group by object, then by date inside each object: one sort gives both the
-    // per-record contiguous range and chronological order within it. O(n log n).
-    std::sort(matched.begin(), matched.end(), [](const CloseApproach& a, const CloseApproach& b) {
+    approaches_ = std::move(matched);
+    rebuildRanges(report.objectsWithApproaches);
+    return report;
+}
+
+std::size_t Dataset::setApproaches(std::vector<CloseApproach>&& approaches) {
+    std::size_t dropped = 0;
+    approaches_.clear();
+    approaches_.reserve(approaches.size());
+    for (CloseApproach& a : approaches) {
+        if (a.objectIndex >= records_.size()) {
+            ++dropped; // a foreign key that points nowhere: never stored
+            continue;
+        }
+        approaches_.push_back(a);
+    }
+    approaches.clear();
+    std::size_t objectsWithApproaches = 0;
+    rebuildRanges(objectsWithApproaches);
+    return dropped;
+}
+
+void Dataset::rebuildRanges(std::size_t& objectsWithApproaches) {
+    // Group by object, then by date inside each object. O(n log n) once.
+    std::sort(approaches_.begin(), approaches_.end(), [](const CloseApproach& a, const CloseApproach& b) {
         if (a.objectIndex != b.objectIndex) {
             return a.objectIndex < b.objectIndex;
         }
         return a.jdTdb < b.jdTdb;
     });
-
-    approaches_ = std::move(matched);
     for (AsteroidRecord& r : records_) {
         r.firstApproach = 0;
         r.approachCount = 0;
@@ -109,10 +129,9 @@ JoinReport Dataset::joinApproaches(std::vector<ParsedApproach>&& rows) {
         AsteroidRecord& record = records_[owner];
         record.firstApproach = static_cast<std::uint32_t>(i);
         record.approachCount = static_cast<std::uint32_t>(j - i);
-        ++report.objectsWithApproaches;
+        ++objectsWithApproaches;
         i = j;
     }
-    return report;
 }
 
 std::uint32_t Dataset::find(const std::string& pdes) const {

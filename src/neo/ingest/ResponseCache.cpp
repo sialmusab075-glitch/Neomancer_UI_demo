@@ -1,5 +1,6 @@
 #include "neo/ingest/ResponseCache.h"
 
+#include "neo/model/Hash.h"
 #include "neo/model/JulianDate.h"
 
 #include <nlohmann/json.hpp>
@@ -38,17 +39,7 @@ bool writeFile(const std::string& path, const std::string& text) {
 
 ResponseCache::ResponseCache(std::string directory) : dir_(std::move(directory)) {}
 
-std::string ResponseCache::keyFor(const std::string& url) {
-    // FNV-1a, 64-bit.
-    std::uint64_t hash = 1469598103934665603ull;
-    for (const char c : url) {
-        hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
-        hash *= 1099511628211ull;
-    }
-    char buf[17];
-    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(hash));
-    return std::string(buf);
-}
+std::string ResponseCache::keyFor(const std::string& url) { return fnv1a64Hex(url); }
 
 std::string ResponseCache::bodyPath(const std::string& url) const { return dir_ + "/" + keyFor(url) + ".json"; }
 

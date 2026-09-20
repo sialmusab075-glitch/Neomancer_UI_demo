@@ -75,6 +75,12 @@ struct IngestReport {
     std::size_t noDiameterAtAll = 0;
 
     FetchStats  fetch;
+
+    // Filled in by neo_ingest after it writes neo.db (stage 4).
+    std::string dbPath;
+    std::size_t dbBytes = 0;
+    double      dbWriteSeconds = 0.0;
+
     bool        ok = false;
     std::string error;
 

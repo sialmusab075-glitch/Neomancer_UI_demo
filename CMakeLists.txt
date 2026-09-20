@@ -80,6 +80,10 @@ add_library(solsim_neo STATIC
     src/neo/model/Dataset.cpp
     src/neo/model/JulianDate.h
     src/neo/model/JulianDate.cpp
+    src/neo/model/Hash.h
+    src/neo/model/Hash.cpp
+    src/neo/storage/Database.h
+    src/neo/storage/Database.cpp
     src/neo/ingest/ParseReport.h
     src/neo/ingest/ParseReport.cpp
     src/neo/ingest/SbdbParser.h
@@ -97,7 +101,7 @@ add_library(solsim_neo STATIC
     src/neo/ingest/Ingestor.cpp
     src/neo/ingest/IngestReport.cpp)
 target_include_directories(solsim_neo PUBLIC src)
-target_link_libraries(solsim_neo PUBLIC solsim_sim PRIVATE nlohmann_json)
+target_link_libraries(solsim_neo PUBLIC solsim_sim PRIVATE nlohmann_json sqlite3)
 solsim_set_warnings(solsim_neo)
 set_target_properties(solsim_neo PROPERTIES FOLDER "neo")
 
@@ -298,4 +302,16 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_ingest_tests)
     set_target_properties(neo_ingest_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_ingest_tests COMMAND neo_ingest_tests)
+
+    # SQLite persistence: round trip, integrity, schema version, atomic writes.
+    add_executable(neo_storage_tests tests/neo_storage_tests.cpp)
+    target_link_libraries(neo_storage_tests PRIVATE solsim_neo sqlite3)
+    target_compile_definitions(neo_storage_tests PRIVATE
+        NEO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    if(MINGW)
+        target_link_options(neo_storage_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_storage_tests)
+    set_target_properties(neo_storage_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_storage_tests COMMAND neo_storage_tests)
 endif()

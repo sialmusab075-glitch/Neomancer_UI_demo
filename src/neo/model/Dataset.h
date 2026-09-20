@@ -66,6 +66,11 @@ public:
     // designation is unknown are dropped and reported. Consumes `rows`.
     JoinReport joinApproaches(std::vector<ParsedApproach>&& rows);
 
+    // Loading from storage: the approaches already carry a resolved
+    // objectIndex, so no join is needed. Rows pointing outside records() are
+    // dropped and the count returned. Consumes `approaches`.
+    std::size_t setApproaches(std::vector<CloseApproach>&& approaches);
+
     const std::vector<AsteroidRecord>& records() const { return records_; }
     const std::vector<CloseApproach>&  approaches() const { return approaches_; }
 
@@ -85,6 +90,12 @@ public:
     void clear();
 
 private:
+    // Sorts approaches_ by (object, date) and refills every record's range.
+    // One sort gives both the contiguous per-record block and chronological
+    // order inside it; every caller that touches approaches_ goes through here,
+    // so the range invariant lives in exactly one place.
+    void rebuildRanges(std::size_t& objectsWithApproaches);
+
     std::vector<AsteroidRecord> records_;
     std::vector<CloseApproach>  approaches_;
     std::unordered_map<std::string, std::uint32_t> byDesignation_;

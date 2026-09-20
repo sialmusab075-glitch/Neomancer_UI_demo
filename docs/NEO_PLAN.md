@@ -916,7 +916,12 @@ the viewport's top-right corner and in the EARTH VIEW panel.
   one-pixel lines; only the selected and hovered paths are widened by the geometry shader.
   Markers stream through one dynamic VBO, one draw call. Faintness scales with the flyby
   count so a thousand additive lines read as a field.
-- Entering the view sets the clock to +1 d/s and jumps it to the selected approach; leaving
+- Entering the view sets the clock to +1 d/s and jumps it to the selected approach **at the
+  midpoint of the fade**, never before: the default query runs on the first visit, so its result
+  usually arrives while the solar view is still on screen, and selecting it then must not move
+  the clock (the date saved for the way back would be the jumped one; this was a bug, found while
+  checking the checkboxes, and is covered in the log by the enter and restore lines carrying the
+  same T+). Leaving
   restores the date, rate, pause state and tracking that were saved, and resets the solar
   event detector so the log does not report every event "between" the two dates.
 - Transition: ~0.8 s. The solar camera flies to the Earth while the view fades to the
@@ -973,6 +978,18 @@ rows) and has a checkbox. Above the table: **SELECT ALL**, **SELECT NONE** and a
   moved, nothing is busy, nothing is delivered. Only a RUN queries, and its result comes back
   fully checked.
 
+**The default (startup) result.** The first visit runs the NEO FILTER form as it stands, by itself.
+That is not a separate path: it and the RUN button both call `submitFilter()` -> `toQuery` ->
+`NeoService::submit` -> `poll` -> `adoptOutcome`, and `adoptOutcome` installs every new result through one
+function, `neo::resetForNewResult` (all boxes checked, no selection, no hover). Verified by scripted
+clicks on a fresh, untouched default result (116 flybys), entered both directly and through the fade:
+116 of 116 shown; SELECT NONE gives 0 of 116; SELECT ALL 116 of 116; a single box 115 of 116; a
+row click selects without touching its box; shift-click and ctrl-click work. The same clicks on a
+RUN result behave identically. `neo_earthview_tests` (179 checks) has `[default]`: the untouched form
+through the same `toQuery`/`submit`/`poll`, adopted over deliberately stale state, on a synthetic
+database and on the real one; a RUN of the same form returns the identical result in the identical
+state.
+
 A SHOW ALL / SELECTED ONLY switch was considered first and dropped in favour of this, which
 covers it (SELECT NONE, then click one row).
 
@@ -994,7 +1011,7 @@ With vsync the view holds 60 fps at 1,000 flybys.
 
 `SOLSIM_EARTH=1` (start in the view; screenshots wait for the first result),
 `SOLSIM_NEO_TOPK`, `SOLSIM_NEO_MAXLD`, `SOLSIM_NEO_PHA=1`, `SOLSIM_NEO_FROM/TO`,
-`SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i|any`, `SOLSIM_NEO_CHECKS=none|first:N|every:N`, `SOLSIM_EARTH_ENTER=n` /
+`SOLSIM_NEO_SELECT=i`, `SOLSIM_NEO_HOVER=i|any`, `SOLSIM_NEO_CHECKS=none|first:N|every:N`, `SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..."` (injects real ImGui clicks; the pointer hovers three frames ahead, as a real cursor does), `SOLSIM_EARTH_ENTER=n` /
 `SOLSIM_EARTH_LEAVE=n` (frame numbers), `SOLSIM_NEO_DB`, `SOLSIM_VSYNC=0`.
 
 ### Not done / known gaps

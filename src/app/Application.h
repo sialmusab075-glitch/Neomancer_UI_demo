@@ -179,6 +179,8 @@ private:
     bool   savedPaused_ = false;
     bool   startInEarth_ = false;              // dev hook
     long   outcomeFrame_ = -1;
+    struct DevClick { long frame; float x, y; bool shift, ctrl; };
+    std::vector<DevClick> devClicks_;          // dev hook: scripted mouse clicks (SOLSIM_CLICKS)
     std::string devChecks_;                    // dev hook: which NEO RESULTS rows stay checked after a query
     int    devSelect_ = -1;                    // dev hooks: a flyby to select / to show as hovered
     int    devHover_ = -1;

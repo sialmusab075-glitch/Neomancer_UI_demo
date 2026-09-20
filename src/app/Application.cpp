@@ -252,6 +252,7 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_NEOS_LEGEND=distance|pha|diameter|approach, SOLSIM_NEOS_SELECT=i (select the i-th drawn object)
 //   SOLSIM_NEOS_DIRECT=n   propagate directly up to n objects (default 2000; 0 = always on the worker)
 //   SOLSIM_NEO_CHECKS=none|first:N|every:N   which NEO RESULTS rows stay checked after the first query
+//   SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..."   inject left clicks at window pixels (to drive the panels in scripted runs)
 //   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
 //   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
@@ -299,6 +300,23 @@ void Application::applyDevHooks() {
     devEnterFrame_ = enterAt.empty() ? -1 : std::atol(enterAt.c_str());
     devLeaveFrame_ = leaveAt.empty() ? -1 : std::atol(leaveAt.c_str());
     devChecks_ = envVar("SOLSIM_NEO_CHECKS");
+    {
+        // SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..." presses the left button at window pixel (x, y) on that frame.
+        const std::string script = envVar("SOLSIM_CLICKS");
+        std::size_t pos = 0;
+        while (pos < script.size()) {
+            std::size_t end = script.find(';', pos);
+            if (end == std::string::npos) end = script.size();
+            const std::string item = script.substr(pos, end - pos);
+            long frame = 0;
+            float x = 0.0f, y = 0.0f;
+            char mod[16] = "";
+            if (std::sscanf(item.c_str(), "%ld:%f:%f:%15s", &frame, &x, &y, mod) >= 3) {
+                devClicks_.push_back({frame, x, y, std::string(mod) == "shift", std::string(mod) == "ctrl"});
+            }
+            pos = end + 1;
+        }
+    }
     const std::string devSel = envVar("SOLSIM_NEO_SELECT"), devHov = envVar("SOLSIM_NEO_HOVER");
     devSelect_ = devSel.empty() ? -1 : std::atoi(devSel.c_str());
     devHover_ = devHov.empty() ? -1 : (devHov == "any" ? -2 : std::atoi(devHov.c_str()));
@@ -409,6 +427,23 @@ void Application::frame(double realDt) {
         applyDpiScale(scale);
     }
 
+    // Dev hook: scripted clicks. Hover three frames ahead, press on the scripted frame, release three frames later.
+    for (const DevClick& c : devClicks_) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (frameIndex_ == c.frame - 3) {
+            io.AddMousePosEvent(c.x, c.y); // hover first, like a real cursor: some widgets need a frame of hover
+        }
+        if (frameIndex_ == c.frame) {
+            io.AddMousePosEvent(c.x, c.y);
+            io.AddKeyEvent(ImGuiMod_Shift, c.shift);
+            io.AddKeyEvent(ImGuiMod_Ctrl, c.ctrl);
+            io.AddMouseButtonEvent(0, true);
+        } else if (frameIndex_ == c.frame + 3) {
+            io.AddMouseButtonEvent(0, false);
+            io.AddKeyEvent(ImGuiMod_Shift, false);
+            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        }
+    }
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();

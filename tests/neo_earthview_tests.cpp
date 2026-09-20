@@ -774,6 +774,121 @@ void testChecks() {
     std::filesystem::remove_all(dir, ec);
 }
 
+// --- the DEFAULT (startup) result: the same checkbox state as a RUN result -----------------------
+
+// What the application does with a finished query, minus the GL and the log: the state that
+// must be fresh for every new result.
+struct AdoptedResult {
+    neo::FlybyChecks checks;
+    int selected = 7; // deliberately stale, as if left over from an earlier result
+    int hovered = 3;
+    std::size_t flybys = 0;
+};
+
+AdoptedResult adopt(const neo::NeoOutcome& out, AdoptedResult previous) {
+    // Dirty state from "the previous result": some boxes unchecked, a selection, a hover.
+    previous.checks.reset(12);
+    previous.checks.setAll(false); // the earlier result's boxes were all unchecked
+    neo::resetForNewResult(previous.checks, previous.selected, previous.hovered, out.ok ? out.scene.flybys.size() : 0);
+    previous.flybys = out.scene.flybys.size();
+    return previous;
+}
+
+// The Earth view runs its default query by itself on the first visit (no RUN pressed): the
+// NEO FILTER form as it is on startup, through the same toQuery / NeoService::submit / poll
+// the RUN button uses. Its result must come with the same state as any other: everything
+// checked, "N of M shown" = M of M, and SELECT NONE / SELECT ALL working on it.
+void checkDefaultResult(neo::NeoService& service, const char* what) {
+    const neo::NeoFilterState startupForm; // untouched: what the panel holds before anyone edits it
+    const neo::FilterParse startup = neo::toQuery(startupForm);
+    check(startup.errors.empty(), std::string(what) + ": the untouched form is a valid query");
+
+    service.submit(startup.query, neo::EarthViewScale()); // the automatic first query
+    neo::NeoOutcome first;
+    check(waitFor([&] { return service.poll(first); }) && first.ok && !first.scene.flybys.empty(), std::string(what) + ": the default query returns flybys");
+    const std::size_t m = first.scene.flybys.size();
+
+    const AdoptedResult a = adopt(first, AdoptedResult());
+    check(a.checks.size() == m && a.checks.checkedCount() == m && a.checks.allChecked(), std::string(what) + ": every row of the default result is checked");
+    check(a.selected == -1 && a.hovered == -1, std::string(what) + ": with no stale selection or hover");
+    check(a.checks.drawnCount(a.selected) == m && a.checks.drawnList(a.selected).size() == m,
+          std::string(what) + ": 'N of M shown' is M of M", std::to_string(a.checks.drawnCount(a.selected)) + " of " + std::to_string(m));
+
+    // SELECT NONE, then SELECT ALL, on the default result.
+    neo::FlybyChecks c = a.checks;
+    c.setAll(false);
+    bool none = c.drawnCount(-1) == 0;
+    for (std::size_t i = 0; i < m; ++i) none = none && !c.checked(i);
+    check(none, std::string(what) + ": SELECT NONE unchecks every row of the default result");
+    c.setAll(true);
+    bool all = c.drawnCount(-1) == m;
+    for (std::size_t i = 0; i < m; ++i) all = all && c.checked(i);
+    check(all, std::string(what) + ": SELECT ALL checks them all again");
+    c.toggle(m > 1 ? 1 : 0);
+    check(c.drawnCount(-1) == m - 1, std::string(what) + ": one checkbox changes the count by exactly one");
+
+    // A RUN of the same form is the same query: the same result, and the same fresh state.
+    service.submit(startup.query, neo::EarthViewScale());
+    neo::NeoOutcome rerun;
+    check(waitFor([&] { return service.poll(rerun); }) && rerun.ok, std::string(what) + ": RUN returns a result");
+    check(sceneFingerprint(rerun.scene) == sceneFingerprint(first.scene), std::string(what) + ": identical to the default result (same query path)");
+    const AdoptedResult b = adopt(rerun, AdoptedResult());
+    check(b.checks.drawnList(b.selected) == a.checks.drawnList(a.selected) && b.selected == a.selected,
+          std::string(what) + ": and it starts in the same checkbox state as the default one");
+}
+
+void testDefaultResult() {
+    std::printf("[default] the automatic first result has the same checkboxes as a RUN result\n");
+
+    // A synthetic database (always available) with results well inside the default form's 10 LD limit.
+    {
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "neo_earthview_default_tests";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        const std::string path = (dir / "neo.db").string();
+        std::vector<Obj> objects;
+        std::vector<App> approaches;
+        for (int i = 0; i < 60; ++i) {
+            objects.push_back({"2033 D" + std::to_string(i), std::nullopt, 22.0 + 0.04 * i, std::optional<bool>(i % 3 == 0)});
+            approaches.push_back({static_cast<std::size_t>(i), jd("2033-05-01") + 3.0 * i, 0.001 + 0.00012 * i, 6.0 + 0.1 * i});
+            if (i % 5 == 0) { // a second approach for some objects: more rows than objects, like the real result
+                approaches.push_back({static_cast<std::size_t>(i), jd("2035-05-01") + 3.0 * i, 0.002 + 0.00012 * i, 8.0});
+            }
+        }
+        const neo::Dataset source = buildDataset(objects, approaches);
+        neo::DatabaseMeta meta;
+        check(neo::saveDatabase(source, meta, path).ok, "write a test database");
+        neo::NeoService service;
+        service.startLoad(path);
+        check(waitFor([&] { return service.state() == neo::NeoService::State::Ready; }), "the database loads");
+        checkDefaultResult(service, "synthetic");
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    // And the real one, where the default result is the ~116 flybys the Earth view opens with.
+    const char* candidates[] = {"data/neo.db", "../data/neo.db", "../../data/neo.db"};
+    std::string path;
+    for (const char* cand : candidates) {
+        std::error_code ec;
+        if (std::filesystem::exists(cand, ec)) {
+            path = cand;
+            break;
+        }
+    }
+    if (path.empty()) {
+        std::printf("  real dataset skipped: no neo.db\n");
+        return;
+    }
+    neo::NeoService real;
+    real.startLoad(path);
+    if (!waitFor([&] { return real.state() != neo::NeoService::State::Loading; }, 60000) || real.state() != neo::NeoService::State::Ready) {
+        std::printf("  real dataset skipped: %s\n", real.message().c_str());
+        return;
+    }
+    checkDefaultResult(real, "real");
+}
+
 // --- the real dataset -----------------------------------------------------------------------------
 
 void testReal() {
@@ -841,6 +956,7 @@ int main() {
     testFilterState();
     testService();
     testChecks();
+    testDefaultResult();
     testReal();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

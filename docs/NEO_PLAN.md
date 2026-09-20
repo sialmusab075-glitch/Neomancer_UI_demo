@@ -347,7 +347,7 @@ page size, and memory for the master vector and each index.
 | 5 | DSA structures + unit tests | **done** (133 checks in `neo_dsa_tests`; study notes in `docs/DSA_NOTES.md`) |
 | 6 | Query engine + planner + oracle tests | **done** (298 checks in `neo_query_tests`; 12,200 random queries, 0 mismatches) |
 | 7 | `neo_bench` + CSV + results summary | not started |
-| 8 | UI hook | Earth view **done** (section 14); solar-view NEOS layer in progress (section 15) |
+| 8 | UI hook | **done**: Earth view (section 14) and the solar-view NEOS layer (section 15) |
 
 ### Stage 1 — decisions recorded
 
@@ -965,3 +965,137 @@ With vsync the view holds 60 fps at 1,000 flybys.
 - `layoutFlybys` / `pickFlyby` live in the GL renderer file and have no unit test.
 - "Show the selected asteroid's orbit in the solar view" was skipped as too costly for
   the first version (see section 15).
+
+## 15. NEOS layer in the solar view (implemented)
+
+A **NEOS** toggle in MISSION CONTROL, independent of the Earth view. It draws the
+near-Earth objects as points in the solar view, each from its own orbital elements,
+with the same compressed / true scale mapping as the planets. The control is a size
+selector, not an on/off for all 42,666.
+
+### Which objects: presets, not "the first N"
+
+| Preset | Objects | Order |
+|---|---|---|
+| PHAS ONLY | every potentially hazardous asteroid (2,549) | RANK |
+| 1,000 / 5,000 / 20,000 | the first N of RANK | RANK |
+| ALL | every object with `e < 1` (42,666; none are hyperbolic today) | RANK |
+| FILTER RESULT | whatever the Earth view's last NEO FILTER query returned | query order |
+
+**RANK** = diameter, largest first (measured, else the H estimate; unknown last; ties by
+record index). It is deterministic and makes the numbered presets **nested** (1,000 inside
+5,000 inside 20,000 inside ALL), so raising the count only adds points and nothing on screen
+moves or disappears. It is the order that matters to a viewer too: the biggest bodies are
+the ones worth seeing first. The cost, stated in the menu's tooltip, is that a small preset
+over-represents large objects (the 1,000th object is ~1 km). A uniform sample would look
+more like the population but would show a random 1,000 of mostly ~100 m rocks. The
+toggle carries the live count: `NEOS: 5,000 / 42,666`.
+
+### Propagation
+
+Each object is propagated by the existing solver (`sim::solveKepler`) from **its own**
+elements. SBDB gives elements at each object's own epoch, `sim::propagate` wants them at
+J2000, so `neo::toSimElements` back-propagates the mean anomaly with the mean motion the
+solver itself uses (section 3): the position *at the object's epoch* is then exactly the
+published one. `propagateSwarm` is `sim::propagate` with the orbital-plane rotation folded
+into two precomputed basis vectors. **Test: over 2,400 (object, time) pairs its position
+differs from `sim::propagate` by 0 AU (bound 1e-12) and its velocity by 4e-16 relative.**
+Objects with `e >= 1` are skipped everywhere (the catalogue drops them).
+
+Two ways to serve a frame (`neo::SwarmField`, pure C++, no GL):
+
+- **DIRECT** (up to 2,000 objects): every object, every frame, on the main thread.
+- **NODES** (above 2,000): a worker thread computes positions **and velocities** on a time
+  grid (1 day by default); each frame interpolates between the two surrounding nodes with a
+  cubic **Hermite** spline (a chord would bend visibly on a 100-day orbit). The frame never
+  waits: if a node is not ready `positionsAt` returns false and the previous positions stay.
+  The grid step follows the clock rate (at most 30 nodes/s: 200 d/s asks for 8 days, the cap
+  is 32) and the node in the direction of travel is prefetched; a jump of centuries is served
+  once the worker has caught up. Replacing the object set while work is queued is safe (a
+  generation counter discards stale nodes; tested repeatedly).
+
+Interpolation accuracy (tests, 300 random orbits, e up to 0.92): at a 1-day step the worst
+error is 2.8e-6 AU (~400 km); the test asserts under 5e-5 AU. Coarser grids trade accuracy
+for speed (0.54 AU worst object at 32 days, information only): at 365 d/s an orbit is a
+blur anyway.
+
+### Rendering
+
+One dynamic VBO of positions (3 floats per object, heliocentric ecliptic AU), one of
+per-object attributes, **one draw call**, additive blending, depth-tested against the Sun and
+planets. The scale mapping is applied **in the vertex shader** (`swarm.vert`), so the CPU
+does no per-point work: compressed `dir * k * log10(1 + d*c)` or true `p * unitsPerAU`, the same
+formula as `ScaleMapper::toRender` (a screenshot check: the CPU-projected selection brackets
+sit on the GPU-drawn point in both scales). Known limit: positions are floats relative to the
+camera target, fine everywhere except zoomed to sub-pixel scale on a far point in true scale.
+
+### Legend (colour and brightness)
+
+`neo/sim/SwarmLegend.h` defines one legend for the shader, the HUD legend bar and the tests:
+DISTANCE FROM EARTH (0.01 to 5 AU, log), PHA, DIAMETER (10 m to 10 km, log), TIME TO
+APPROACH (now to one year; refreshed about once per simulated day). *The Earth view has no
+SWARM mode yet, so there was nothing to share it with; the legend is written so it can adopt
+it.*
+
+### Selection, shared by both views
+
+Clicking a point selects that object (the nearest within 10 px, `pickSwarm`, pure and
+tested). The selection is one `Dataset` record index used by both views:
+
+- solar -> Earth: the Earth view selects that asteroid's flyby, if its current result has one
+  (the one nearest in time); if not, TARGET still shows the asteroid;
+- Earth -> solar: selecting a flyby (marker, row, prev/next) highlights the asteroid in the
+  solar view even when it is not in the drawn preset.
+
+The solar view shows brackets, a tag and the selected object's **orbit** (96 points of the
+ellipse, mapped like the planets' rings; this also delivers the "orbit in the solar view"
+item that was skipped in stage 8). TARGET · OBSERVATION shows the object: distance from the
+Sun and from the Earth now, orbit (a, e, i, q, Q, period), MOID, diameter and H, class, and
+its next approach in the data. Choosing a planet (click or the target combo) clears it.
+
+### Frame rate per preset (Intel UHD, 1920x1094 window, 4x MSAA HDR + bloom, solar view)
+
+Median of three runs each, 600 frames. **Vsync on: 60.0 fps for every preset.** Uncapped:
+
+| Preset | mode | uncapped fps | frame | propagation cost |
+|---|---|---|---|---|
+| NEOS off | | 347 to 388 (155 on the first launch after a pause) | 2.6 to 2.9 ms | |
+| 1,000 | direct | 304 | 3.3 ms | 0.16 to 0.31 ms per frame, main thread |
+| PHAs, 2,549 | worker | 348 | 2.9 ms | 0.4 to 0.8 ms per node, worker |
+| 5,000 | worker | 325 | 3.1 ms | 0.7 to 2.5 ms per node |
+| 20,000 | worker | 294 | 3.4 ms | 3.2 to 6.3 ms per node |
+| ALL, 42,666 | worker | 279 | 3.6 ms | 5.6 ms per node idle, 7 to 13 loaded |
+
+For comparison, the **same presets forced onto the main thread** (`SOLSIM_NEOS_DIRECT`):
+PHAs 359, 5,000 277, 20,000 175, ALL 114 fps (6.8 ms of propagation per frame). That is
+why the worker exists: it costs ALL about one extra millisecond per frame instead of seven.
+The 2,000 threshold is where direct mode costs about 0.5 to 1 ms.
+
+The measurement is noisy: the first launch after a pause runs at less than half speed
+(GPU clocks), so each figure is a median and the "off" row shows both.
+
+**The practical ceiling on this machine is not reached.** ALL is affordable at 60 fps with
+headroom (about 3x). **Default preset: PHAs only** (2,549): it is the smallest set with a
+clear meaning, well under the ceiling, and on the worker. The layer itself is **off** until
+switched on, so the solar view is unchanged by default.
+
+### Tests
+
+`neo_swarm_tests` (74 checks): kernel vs `sim::propagate`, the epoch convention, selection
+(RANK, PHA, nesting, ties, clamps, the filtered result), the field in both modes (float
+precision, at and between nodes, forward, backward, a two-century jump, grid step by rate,
+pause, replacing objects mid-flight), the legend, and the real dataset (2,549 PHAs, 42,666
+propagatable, one direct frame and one worker node timed, a real object equal to
+`sim::propagate`). `render_tests` gained the picker (8 checks).
+
+### Dev hooks
+
+`SOLSIM_NEOS=pha|1000|5000|20000|all|result`, `SOLSIM_NEOS_LEGEND=distance|pha|diameter|approach`,
+`SOLSIM_NEOS_SELECT=i`, `SOLSIM_NEOS_DIRECT=n` (0 = always on the worker).
+
+### Not done
+
+- Real mouse clicks on a NEOS point were not driven by hand (the picker is unit-tested and
+  the selection path was exercised by a hook).
+- Double-click to track an asteroid with the camera.
+- The Earth view has no legend / SWARM mode.

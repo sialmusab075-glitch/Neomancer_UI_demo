@@ -90,11 +90,13 @@ bool SceneRenderer::init(std::string& error) {
 
     // The Earth view is optional: if its shaders fail, the solar view still works.
     earthReady_ = earth_.init(earthError_);
+    swarmReady_ = swarm_.init(swarmError_); // optional too: without it the NEOS toggle is disabled
     return true;
 }
 
 void SceneRenderer::destroy() {
     earth_.destroy();
+    swarm_.destroy();
     post_.destroy();
     orbits_.destroy();
     grid_.destroy();
@@ -477,6 +479,16 @@ void SceneRenderer::drawScene(const sim::SolarSystem& system, const ScaleMapper&
         op.plainColor = rgb(st.orbitPlain);
         op.plainAlpha = st.orbitPlainAlpha;
         orbits_.draw(orbitShader_, system, op);
+    }
+
+    // --- NEOS: every selected asteroid, one draw call; additive, depth-tested (the Sun and planets hide
+    //     what is behind them), no depth write ------------------------------------------------------------
+    if (swarmFrame_.enabled) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        swarm_.draw(swarmFrame_, mapper, viewProj, target, vp.dpiScale);
     }
 
     glDepthMask(GL_TRUE);

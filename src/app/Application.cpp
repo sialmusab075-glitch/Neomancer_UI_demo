@@ -102,10 +102,12 @@ int Application::run() {
         ++frameIndex_;
         if (!screenshotPath_.empty() && frameIndex_ >= screenshotFrame_ &&
             (!startInEarth_ || (outcomeFrame_ >= 0 && frameIndex_ >= outcomeFrame_ + screenshotFrame_) ||
-             neo_.state() == neo::NeoService::State::Failed)) {
+             neo_.state() == neo::NeoService::State::Failed) &&
+            (!devNeos_ || swarmHavePositions_) && devNeosSelect_ < 0) {
             const bool ok = saveBackBufferBmp(screenshotPath_, fbw, fbh);
             logInfo("screenshot %s: %s", ok ? "written" : "FAILED", screenshotPath_.c_str());
-            logInfo("frame rate at capture: %.1f fps, CPU per frame %.2f ms", static_cast<double>(ImGui::GetIO().Framerate), cpuFrameMs_);
+            logSwarmStats();
+        logInfo("frame rate at capture: %.1f fps, CPU per frame %.2f ms", static_cast<double>(ImGui::GetIO().Framerate), cpuFrameMs_);
             glfwSetWindowShouldClose(window_.handle(), GLFW_TRUE);
         }
         window_.swapBuffers();
@@ -246,6 +248,9 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_NEO_PHA=1, SOLSIM_NEO_FROM/TO=YYYY-MM-DD   more of that first query's filter
 //   SOLSIM_NEO_SELECT=i, SOLSIM_NEO_HOVER=i|any   select / show as hovered result i (0-based; any = a visible one)
 //   SOLSIM_EARTH_ENTER=n, SOLSIM_EARTH_LEAVE=n   enter / leave the Earth view at frame n (with SOLSIM_SELECT=EARTH)
+//   SOLSIM_NEOS=pha|1000|5000|20000|all|result   turn the NEOS layer on with that preset
+//   SOLSIM_NEOS_LEGEND=distance|pha|diameter|approach, SOLSIM_NEOS_SELECT=i (select the i-th drawn object)
+//   SOLSIM_NEOS_DIRECT=n   propagate directly up to n objects (default 2000; 0 = always on the worker)
 //   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
 //   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
@@ -295,6 +300,23 @@ void Application::applyDevHooks() {
     const std::string devSel = envVar("SOLSIM_NEO_SELECT"), devHov = envVar("SOLSIM_NEO_HOVER");
     devSelect_ = devSel.empty() ? -1 : std::atoi(devSel.c_str());
     devHover_ = devHov.empty() ? -1 : (devHov == "any" ? -2 : std::atoi(devHov.c_str()));
+    const std::string neos = envVar("SOLSIM_NEOS");
+    if (!neos.empty()) {
+        devNeos_ = true;
+        hud_.showNeos = true;
+        hud_.neoPreset = neos == "pha" ? 0 : neos == "1000" ? 1 : neos == "5000" ? 2 : neos == "20000" ? 3
+                       : neos == "result" ? 5 : 4; // "all" and anything else
+    }
+    const std::string neosLegend = envVar("SOLSIM_NEOS_LEGEND");
+    if (!neosLegend.empty()) {
+        hud_.neoLegend = neosLegend == "pha" ? 1 : neosLegend == "diameter" ? 2 : neosLegend == "approach" ? 3 : 0;
+    }
+    const std::string neosDirect = envVar("SOLSIM_NEOS_DIRECT");
+    if (!neosDirect.empty()) {
+        swarmField_.setDirectLimit(static_cast<std::size_t>(std::atol(neosDirect.c_str())));
+    }
+    const std::string neosSel = envVar("SOLSIM_NEOS_SELECT");
+    devNeosSelect_ = neosSel.empty() ? -1 : std::atoi(neosSel.c_str());
     const std::string cam = envVar("SOLSIM_CAMERA");
     if (!cam.empty()) {
         float dist = camera_.distance(), yawDeg = 0.0f, pitchDeg = 0.0f;
@@ -416,6 +438,7 @@ void Application::frame(double realDt) {
     if (viewTransitioning() && !earthShown) {
         updateTransitionCamera();
     }
+    updateSwarm(earthShown);
     eventBuffer_.clear();
     if (!earthShown) {
         detector_.update(system_, eventBuffer_); // solar events make no sense while the clock plays flybys
@@ -564,6 +587,7 @@ void Application::frameSolarOverlay(const render::FrameViewport& vp, const rende
         overlayIn.viewMaxX = vp.viewMin.x + vp.viewSize.x;
     }
     hud::drawSceneOverlay(overlayIn);
+    drawSwarmSelectionOverlay(vp, cam);
 }
 
 void Application::drawHud(hud::HudEvents& ev) {
@@ -574,7 +598,19 @@ void Application::drawHud(hud::HudEvents& ev) {
         drawEarthPanels(ev);
         return;
     }
-    hud::drawPlanetPanel(system_, hud_, clock_.elapsedDays());
+    if (selectedRecord_ != neo::kInvalidRecord && neo_.dataset() != nullptr) {
+        // An asteroid is selected (from either view): TARGET shows it instead of the planet.
+        hud::NeoPanelView view = neoPanelView();
+        view.solarView = true;
+        view.haveState = true;
+        view.objectAu = selectedObjectAu();
+        const int earth = system_.indexOfTableRow(sim::kEarth);
+        view.earthAu = earth >= 0 ? system_.body(earth).helioPos_AU : sim::Vec3d();
+        static const hud::EarthUiState noFlyby;
+        hud::drawAsteroidTarget(noFlyby, view);
+    } else {
+        hud::drawPlanetPanel(system_, hud_, clock_.elapsedDays());
+    }
     hud::drawDataGrid(system_, hud_);
 
     const char* windowTag = hud::kHistoryWindowLabels[hud_.historyWindow];
@@ -639,6 +675,7 @@ void Application::applyHudEvents(const hud::HudEvents& ev, const render::FrameVi
 // keyboard; logging the difference once per frame covers all of them.
 void Application::logStateChanges() {
     if (hud_.selected != prevSelected_) {
+        clearSelectedRecord(); // the target combo (or a click) chose a planet
         probe_.reset();
         probeCrossings_ = 0;
         history_.reset();
@@ -744,8 +781,10 @@ void Application::handlePick(const render::FrameViewport& vp) {
     }
     const int hit = scene_.pick(visuals_, camera_, vp, in.clickX(), in.clickY());
     if (hit < 0) {
-        return; // clicking empty space keeps the current selection
+        pickSwarmObject(vp, in.clickX(), in.clickY()); // else: clicking empty space keeps the current selection
+        return;
     }
+    clearSelectedRecord(); // a planet was clicked: it is the target now
     hud_.selected = hit;
     if (in.doubleClicked()) {
         setFollowing(true);

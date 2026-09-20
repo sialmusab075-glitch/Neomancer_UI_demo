@@ -6,6 +6,7 @@
 #include "render/Picking.h"
 #include "render/ReactorStructure.h"
 #include "render/ScaleMapper.h"
+#include "render/SwarmPick.h"
 #include "render/Starfield.h"
 #include "sim/BodyTable.h"
 #include "sim/Constants.h"
@@ -106,6 +107,70 @@ void testPicking() {
     // Behind the camera is not in front.
     const glm::vec3 behind = cam.eyeOffset() * 2.0f;
     check(!render::projectToScreen(vp, behind, W, H).inFront, "point behind the eye is not in front");
+}
+
+void testSwarmPick() {
+    std::printf("[swarm pick] the NEOS layer's CPU picker\n");
+    render::OrbitCamera cam;
+    cam.setDistance(30.0f);
+    cam.setAngles(0.7f, 0.3f);
+    render::ScaleMapper mapper; // compressed, like the default view
+    render::FrameViewport vp;
+    vp.framebufferPx = glm::vec2(1600.0f, 900.0f);
+    vp.windowPx = glm::vec2(1600.0f, 900.0f);
+    vp.viewMin = glm::vec2(200.0f, 40.0f); // the 3D view is not the whole window
+    vp.viewSize = glm::vec2(1200.0f, 800.0f);
+
+    // Heliocentric ecliptic AU: a few points spread around the inner system.
+    const float pts[] = {1.0f, 0.0f, 0.0f,   0.0f, 1.5f, 0.2f,   -2.0f, -0.5f, 0.1f,   0.3f, -0.9f, 0.0f,   -4.0f, 3.0f, 0.5f};
+    const std::size_t n = 5;
+    const glm::mat4 viewProj = cam.projection(vp.aspect()) * cam.view();
+    auto screenOf = [&](std::size_t i) {
+        const glm::dvec3 w = mapper.toRender(sim::Vec3d{pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]});
+        render::ScreenPoint sp = render::projectToScreen(viewProj, glm::vec3(w - cam.target()), vp.viewSize.x, vp.viewSize.y);
+        sp.px += vp.viewMin;
+        return sp;
+    };
+    bool allFound = true;
+    for (std::size_t i = 0; i < n; ++i) {
+        const render::ScreenPoint sp = screenOf(i);
+        allFound = allFound && sp.onScreen && render::pickSwarm(pts, n, mapper, cam, vp, sp.px.x, sp.px.y, 10.0f) == static_cast<int>(i);
+    }
+    check(allFound, "clicking exactly on each projected point picks that point");
+    const render::ScreenPoint s2 = screenOf(2);
+    check(render::pickSwarm(pts, n, mapper, cam, vp, s2.px.x + 6.0f, s2.px.y - 4.0f, 10.0f) == 2, "a click a few pixels away still picks it");
+    check(render::pickSwarm(pts, n, mapper, cam, vp, s2.px.x + 40.0f, s2.px.y + 40.0f, 10.0f) == -1, "a click outside the radius picks nothing");
+    check(render::pickSwarm(pts, 0, mapper, cam, vp, 500.0f, 400.0f, 10.0f) == -1, "no points: nothing");
+    check(render::pickSwarm(nullptr, 3, mapper, cam, vp, 500.0f, 400.0f, 10.0f) == -1, "no buffer: nothing");
+
+    // Two points near each other: the closer to the cursor wins.
+    const float pair[] = {1.00f, 0.00f, 0.0f,   1.02f, 0.00f, 0.0f};
+    render::ScreenPoint p0, p1;
+    {
+        const glm::dvec3 w0 = mapper.toRender(sim::Vec3d{pair[0], pair[1], pair[2]});
+        const glm::dvec3 w1 = mapper.toRender(sim::Vec3d{pair[3], pair[4], pair[5]});
+        p0 = render::projectToScreen(viewProj, glm::vec3(w0 - cam.target()), vp.viewSize.x, vp.viewSize.y);
+        p1 = render::projectToScreen(viewProj, glm::vec3(w1 - cam.target()), vp.viewSize.x, vp.viewSize.y);
+        p0.px += vp.viewMin;
+        p1.px += vp.viewMin;
+    }
+    const float gap = std::sqrt((p0.px.x - p1.px.x) * (p0.px.x - p1.px.x) + (p0.px.y - p1.px.y) * (p0.px.y - p1.px.y));
+    if (gap > 4.0f) {
+        check(render::pickSwarm(pair, 2, mapper, cam, vp, p1.px.x, p1.px.y, 30.0f) == 1, "of two nearby points the one under the cursor wins", fmt("gap %.1f px", gap));
+    } else {
+        check(true, "(the two nearby points overlap at this zoom: nothing to distinguish)");
+    }
+
+    // A point behind the camera is never picked, however large the radius. True scale is linear, so a point
+    // twice the eye offset out on the camera's side of the target is unambiguously behind the eye.
+    render::ScaleMapper linear;
+    linear.mode = render::ScaleMode::True;
+    const glm::vec3 eye2 = cam.eyeOffset() * 2.0f; // render axes; render (x, y, z) = ecliptic (x, z, -y) * units per AU
+    const float behind[] = {eye2.x / 10.0f, -eye2.z / 10.0f, eye2.y / 10.0f};
+    const glm::vec3 behindRel = glm::vec3(linear.toRender(sim::Vec3d{behind[0], behind[1], behind[2]}) - cam.target());
+    check(!render::projectToScreen(viewProj, behindRel, vp.viewSize.x, vp.viewSize.y).inFront, "the test point really is behind the eye");
+    check(render::pickSwarm(behind, 1, linear, cam, vp, vp.viewMin.x + vp.viewSize.x * 0.5f, vp.viewMin.y + vp.viewSize.y * 0.5f, 5000.0f) == -1,
+          "a point behind the eye is skipped");
 }
 
 void testGenerators() {
@@ -259,6 +324,7 @@ void testStructure() {
 int main() {
     testScaleMapper();
     testPicking();
+    testSwarmPick();
     testGenerators();
     testStructure();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

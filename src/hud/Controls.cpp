@@ -1,16 +1,34 @@
 #include "hud/Panels.h"
 #include "hud/Theme.h"
+#include "neo/sim/SwarmLegend.h"
+#include "neo/sim/SwarmSelection.h"
 #include "sim/BodyTable.h"
 #include "sim/SimClock.h"
 #include "sim/SolarSystem.h"
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <string>
 
 namespace hud {
 
 namespace {
+
+// 42666 -> "42,666"
+std::string withCommas(int n) {
+    const std::string digits = std::to_string(n);
+    std::string out;
+    for (std::size_t i = 0; i < digits.size(); ++i) {
+        out += digits[i];
+        const std::size_t remaining = digits.size() - 1 - i;
+        if (remaining > 0 && remaining % 3 == 0) {
+            out += ',';
+        }
+    }
+    return out;
+}
 
 void sectionLabel(const char* text) {
     ImGui::Dummy(ImVec2(0.0f, 2.0f * dpi()));
@@ -122,6 +140,69 @@ HudEvents drawControls(sim::SimClock& clock, const sim::SolarSystem& system, Hud
                 ImGui::SetTooltip(state.earthView ? "Fly back out to the solar system"
                                                   : "Fly in to the Earth and see near-Earth asteroid flybys");
             }
+        }
+
+        // --- NEOS: how many of the near-Earth objects to draw, and what their colour means ------
+        ImGui::Dummy(ImVec2(0.0f, 2.0f * dpi()));
+        {
+            ImGui::BeginDisabled(!state.neoAvailable);
+            // The toggle carries the live count: "NEOS: 5,000 / 42,666" (drawn objects / objects in the database).
+            char toggle[80];
+            std::snprintf(toggle, sizeof toggle, "NEOS: %s##neos_toggle", state.neosLabel[0] != '\0' ? state.neosLabel : "-");
+            Checkbox(toggle, &state.showNeos);
+
+            const float rowW = ImGui::GetContentRegionAvail().x;
+            const float comboW = rowW * 0.47f; // preset and legend share one row
+            const float legendW = rowW - comboW - ImGui::GetStyle().ItemSpacing.x;
+            const int presetIndex = std::clamp(state.neoPreset, 0, neo::kSwarmPresetCount - 1);
+            auto presetText = [&](int i, char* out, std::size_t n) {
+                std::snprintf(out, n, "%s  (%s)", neo::toString(static_cast<neo::SwarmPreset>(i)), withCommas(state.neoPresetSize[i]).c_str());
+            };
+            char preview[64];
+            presetText(presetIndex, preview, sizeof preview);
+            ImGui::SetNextItemWidth(comboW);
+            if (ImGui::BeginCombo("##neopreset", preview)) {
+                for (int i = 0; i < neo::kSwarmPresetCount; ++i) {
+                    char item[64];
+                    presetText(i, item, sizeof item);
+                    if (ImGui::Selectable(item, i == presetIndex)) {
+                        state.neoPreset = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("How many objects to draw. The numbered presets take the LARGEST first, so each\n"
+                                  "one contains the smaller ones; FILTER RESULT draws what the Earth view's NEO FILTER\n"
+                                  "last query returned.");
+            }
+
+            const int legendIndex = std::clamp(state.neoLegend, 0, neo::kSwarmLegendCount - 1);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(legendW);
+            if (ImGui::BeginCombo("##neolegend", neo::toString(static_cast<neo::SwarmLegend>(legendIndex)))) {
+                for (int i = 0; i < neo::kSwarmLegendCount; ++i) {
+                    if (ImGui::Selectable(neo::toString(static_cast<neo::SwarmLegend>(i)), i == legendIndex)) {
+                        state.neoLegend = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+
+            // The legend: the ramp the points are coloured with, its ends labelled.
+            const auto legend = static_cast<neo::SwarmLegend>(legendIndex);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            const float barH = 6.0f * dpi();
+            const float barW = rowW;
+            const ImU32 cFar = toU32(t.scene.orbitPlain), cMid = toU32(t.scene.structure), cNear = toU32(t.scene.accent);
+            dl->AddRectFilledMultiColor(p0, ImVec2(p0.x + barW * 0.5f, p0.y + barH), cFar, cMid, cMid, cFar);
+            dl->AddRectFilledMultiColor(ImVec2(p0.x + barW * 0.5f, p0.y), ImVec2(p0.x + barW, p0.y + barH), cMid, cNear, cNear, cMid);
+            ImGui::Dummy(ImVec2(barW, barH));
+            TinyText(neo::legendFarText(legend));
+            ImGui::SameLine(barW - ImGui::CalcTextSize(neo::legendNearText(legend)).x * 0.9f);
+            TinyText(neo::legendNearText(legend));
         }
 
         // --- HUD theme: label and both choices on one row ---------------------------------

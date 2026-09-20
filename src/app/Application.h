@@ -9,6 +9,9 @@
 #include "hud/SceneOverlay.h"
 #include "neo/model/JulianDate.h"
 #include "neo/query/NeoService.h"
+#include "neo/sim/SwarmField.h"
+#include "neo/sim/SwarmLegend.h"
+#include "neo/sim/SwarmSelection.h"
 #include "render/Camera.h"
 #include "render/EarthRenderer.h"
 #include "render/ScaleMapper.h"
@@ -21,6 +24,7 @@
 #include <glm/vec3.hpp>
 #include <imgui.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -83,6 +87,21 @@ private:
     void drawViewFade(const hud::ViewRect& viewRect);
     void renderEarthScene(const render::FrameViewport& vp, const render::SceneLayers& layers);
     void frameSolarOverlay(const render::FrameViewport& vp, const render::OrbitCamera& cam);
+
+    // --- NEOS layer and the shared selection (src/app/SwarmView.cpp) ----------------------------
+    void onNeoReady();
+    void refreshPresetSizes();
+    std::vector<std::uint32_t> currentResultRecords() const;
+    void rebuildSwarm();
+    void updateSwarmLabel();
+    int  slotOf(std::uint32_t record) const;
+    void updateSwarm(bool earthShown);
+    void setSelectedRecord(std::uint32_t record, bool syncEarth = true);
+    void clearSelectedRecord();
+    bool pickSwarmObject(const render::FrameViewport& vp, float x, float y);
+    sim::Vec3d selectedObjectAu() const;
+    void drawSwarmSelectionOverlay(const render::FrameViewport& vp, const render::OrbitCamera& cam);
+    void logSwarmStats() const;
 
     void setFollowing(bool follow);
     void applyScaleMode(bool trueScale);
@@ -164,6 +183,27 @@ private:
     int    devHover_ = -1;
     long   devEnterFrame_ = -1;                // dev hooks: enter / leave the Earth view at a frame
     long   devLeaveFrame_ = -1;
+
+    // NEOS layer
+    std::unique_ptr<neo::SwarmCatalog> swarmCatalog_;
+    neo::SwarmField   swarmField_;
+    std::vector<std::uint32_t> swarmRecords_;  // Dataset::records() index of each drawn point
+    std::vector<float> swarmPos_;              // what is on screen: 3 floats per point, heliocentric ecliptic AU
+    std::vector<float> swarmApproachDays_;
+    double            swarmApproachJd_ = -1e30;
+    double            swarmUploadT_ = 1e300;
+    bool              swarmDirty_ = false;     // the selection must be rebuilt (preset changed / new result)
+    bool              swarmHavePositions_ = false;
+    int               prevNeoPreset_ = -1;
+    int               prevNeoLegend_ = -1;
+    bool              prevShowNeos_ = false;
+    // The selected asteroid, shared by both views (a Dataset::records() index).
+    std::uint32_t     selectedRecord_ = neo::kInvalidRecord;
+    int               swarmSlotOfSelected_ = -1;
+    neo::SwarmElements selectedElements_;
+    sim::OrbitalElements selectedSim_;
+    int               devNeosSelect_ = -1;     // dev hook
+    bool              devNeos_ = false;
 
     // Previous-frame state, to log changes whatever caused them (mouse, keys, panels).
     int  prevSelected_ = -1;

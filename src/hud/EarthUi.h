@@ -4,6 +4,7 @@
 #include "neo/model/Dataset.h"
 #include "neo/query/FilterState.h"
 #include "neo/sim/EarthFlybys.h"
+#include "sim/Vec3.h"
 
 #include <cstddef>
 #include <string>
@@ -50,6 +51,13 @@ struct NeoPanelView {
     std::size_t returnedObjects = 0;
 
     double jdNow = 0.0;                         // the simulation clock, as a Julian Date
+
+    // The shared selection (either view): a Dataset::records() index, or neo::kInvalidRecord.
+    std::uint32_t selectedRecord = neo::kInvalidRecord;
+    bool          solarView = false;            // TARGET is drawn for the solar view's NEOS layer
+    bool          haveState = false;            // objectAu / earthAu are valid (solar view)
+    sim::Vec3d    objectAu;                     // the selected object and the Earth, heliocentric ecliptic AU
+    sim::Vec3d    earthAu;
     bool   textureLoaded = false;               // Blue Marble vs the procedural grid
     float  queryMs = 0.0f;
 };

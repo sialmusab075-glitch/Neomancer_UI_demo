@@ -2,6 +2,7 @@
 
 #include "render/Camera.h"
 #include "render/EarthRenderer.h"
+#include "render/SwarmRenderer.h"
 #include "render/EclipticGrid.h"
 #include "render/FrameViewport.h"
 #include "render/LineMesh.h"
@@ -94,6 +95,13 @@ public:
     // Rebuilds the flyby path meshes; call only when the query result changes.
     void setFlybyScene(const neo::FlybyScene& scene) { earth_.setScene(scene); }
     void clearFlybyScene() { earth_.clearScene(); }
+
+    // --- NEOS layer (solar view): a single point cloud, one draw call ---------------------------
+    bool swarmAvailable() const { return swarmReady_; }
+    const std::string& swarmError() const { return swarmError_; }
+    SwarmRenderer& swarm() { return swarm_; }
+    // What the next render() should draw (call every frame; enabled = false hides the layer).
+    void setSwarmFrame(const SwarmDrawParams& params) { swarmFrame_ = params; }
     void renderEarth(const EarthFrame& frame, const SceneLayers& layers, double timeSeconds,
                      const style::SceneStyle& style);
 
@@ -135,6 +143,10 @@ private:
     float structureY_ = 0.0f;
 
     EarthRenderer earth_;
+    SwarmRenderer swarm_;
+    SwarmDrawParams swarmFrame_;
+    bool swarmReady_ = false;
+    std::string swarmError_;
     bool earthReady_ = false;
     std::string earthError_;
 };

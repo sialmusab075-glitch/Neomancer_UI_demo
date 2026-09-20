@@ -153,7 +153,11 @@ void Application::commitEnterEarth() {
     swapped_ = true;
     logLine("EARTH VIEW \xC2\xB7 CLOCK 1 D/S \xC2\xB7 SCHEMATIC FLYBYS", hud::LogKind::System);
     if (haveOutcome_ && outcome_.ok && !outcome_.scene.flybys.empty()) {
-        selectFlyby(earthUi_.selected >= 0 ? earthUi_.selected : 0, true);
+        if (earthUi_.selected >= 0) {
+            selectFlyby(earthUi_.selected, true); // the asteroid picked in the solar view, if this result has it
+        } else if (selectedRecord_ == neo::kInvalidRecord) {
+            selectFlyby(0, true);
+        }
     }
 }
 
@@ -253,6 +257,7 @@ void Application::updateNeo() {
         neoMessage_ = neo_.message();
         switch (state) {
         case neo::NeoService::State::Ready:
+            onNeoReady();
             std::snprintf(hud_.neoStatus, sizeof hud_.neoStatus, "%s OBJ \xC2\xB7 %s APP",
                           withCommas(static_cast<long long>(neo_.objectCount())).c_str(),
                           withCommas(static_cast<long long>(neo_.approachCount())).c_str());
@@ -307,6 +312,10 @@ void Application::adoptOutcome(neo::NeoOutcome&& outcome) {
         return;
     }
     formErrors_.clear();
+    refreshPresetSizes();
+    if (hud_.neoPreset == static_cast<int>(neo::SwarmPreset::CurrentResult)) {
+        swarmDirty_ = true; // the NEOS layer follows the result
+    }
     scene_.setFlybyScene(outcome_.scene); // the only place the path meshes are rebuilt
     logLine("NEO QUERY \xC2\xB7 " + outcome_.summary, hud::LogKind::System);
     if (!outcome_.scene.flybys.empty()) {
@@ -350,6 +359,7 @@ void Application::selectFlyby(int index, bool jumpClock) {
     if (!haveOutcome_ || !outcome_.ok || index < 0 || static_cast<std::size_t>(index) >= outcome_.scene.flybys.size()) {
         return;
     }
+    setSelectedRecord(outcome_.scene.flybys[static_cast<std::size_t>(index)].object, false); // shared with the solar view
     earthUi_.selected = index;
     if (jumpClock) {
         // Land ON the closest approach: the object is at its real distance, at its real date.
@@ -456,6 +466,7 @@ hud::NeoPanelView Application::neoPanelView() const {
         v.queryMs = static_cast<float>(outcome_.totalMs);
     }
     v.jdNow = earthJd();
+    v.selectedRecord = selectedRecord_;
     v.textureLoaded = scene_.hasEarthTexture();
     return v;
 }

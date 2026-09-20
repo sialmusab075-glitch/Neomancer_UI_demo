@@ -444,24 +444,29 @@ void drawNeoResultsPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& 
 // ---------------------------------------------------------------------------
 
 void drawAsteroidTarget(const EarthUiState& ui, const NeoPanelView& view) {
-    const bool has = view.scene && view.dataset && ui.selected >= 0 &&
-                     static_cast<std::size_t>(ui.selected) < view.scene->flybys.size();
-    const neo::Flyby* f = has ? &view.scene->flybys[static_cast<std::size_t>(ui.selected)] : nullptr;
-    const neo::AsteroidRecord* record = has ? &view.dataset->records()[f->object] : nullptr;
+    // The shared selection: one asteroid, whichever view picked it. A flyby is only
+    // present when the Earth view's current result has one for it.
+    const bool haveRecord = view.dataset && view.selectedRecord < view.dataset->records().size();
+    const neo::AsteroidRecord* record = haveRecord ? &view.dataset->records()[view.selectedRecord] : nullptr;
+    const neo::Flyby* f = nullptr;
+    if (haveRecord && view.scene && ui.selected >= 0 && static_cast<std::size_t>(ui.selected) < view.scene->flybys.size() &&
+        view.scene->flybys[static_cast<std::size_t>(ui.selected)].object == view.selectedRecord) {
+        f = &view.scene->flybys[static_cast<std::size_t>(ui.selected)];
+    }
     char hex[16] = "";
-    if (has) {
+    if (haveRecord) {
         std::snprintf(hex, sizeof hex, "0x%04X", hexId(record->object.pdes.c_str()));
     }
-    if (BeginPanel(kWinTarget, "TARGET \xC2\xB7 OBSERVATION", has ? "NEO FLYBY" : "EARTH VIEW")) {
-        if (!has) {
-            TinyText("CLICK A MARKER (OR A RESULTS ROW) TO SEE THE ASTEROID");
+    const char* tag = f ? "NEO FLYBY" : (haveRecord ? "NEO" : (view.solarView ? "SOLAR VIEW" : "EARTH VIEW"));
+    if (BeginPanel(kWinTarget, "TARGET \xC2\xB7 OBSERVATION", tag)) {
+        if (!haveRecord) {
+            TinyText(view.solarView ? "CLICK A NEOS POINT TO SEE THE ASTEROID" : "CLICK A MARKER (OR A RESULTS ROW) TO SEE THE ASTEROID");
             EndPanel();
             return;
         }
         const HudTheme& t = theme();
         const float s = dpi();
         const neo::Asteroid& a = record->object;
-        const neo::CloseApproach& ap = view.dataset->approaches()[f->approach];
 
         // Name row.
         pushFontSize(t.sizeValue);
@@ -485,26 +490,55 @@ void drawAsteroidTarget(const EarthUiState& ui, const NeoPanelView& view) {
             TinyText(full.c_str());
         }
 
-        // Highlighted metric: the nominal distance in lunar distances.
+        char buf[128];
         ImGui::Dummy(ImVec2(0.0f, 3.0f * s));
-        HeroNumber(f->distanceAU / neo::kLunarDistanceAU, 2, 2, "LD \xC2\xB7 NOMINAL CLOSEST APPROACH");
+        if (f) {
+            // Highlighted metric: the nominal distance in lunar distances.
+            HeroNumber(f->distanceAU / neo::kLunarDistanceAU, 2, 2, "LD \xC2\xB7 NOMINAL CLOSEST APPROACH");
+        } else if (view.haveState) {
+            HeroNumber(sim::length(view.objectAu), 2, 2, "AU \xC2\xB7 FROM THE SUN NOW");
+        } else {
+            HeroNumber(a.orbital.semiMajorAxisAU, 2, 2, "AU \xC2\xB7 SEMI-MAJOR AXIS");
+        }
         ImGui::Dummy(ImVec2(0.0f, 3.0f * s));
 
-        char buf[128];
-        dataRow("DATE (TDB)", neo::formatJulianDate(f->tcaJd).c_str(), t.textValue);
-        dataRow("NOMINAL", distanceText(ap.distanceAU).c_str(), t.textValue);
-        dataRow("MIN (3\xCF\x83)", distanceText(ap.distanceMinAU).c_str(), t.textValue);
-        dataRow("MAX (3\xCF\x83)", distanceText(ap.distanceMaxAU).c_str(), t.textValue);
-        if (ap.distRangeDerived) {
-            TinyText("  MIN/MAX WERE ABSENT: THE NOMINAL DISTANCE STANDS IN", t.textMicro);
-        }
-        std::snprintf(buf, sizeof buf, "%.2f KM/S", ap.relVelocityKms);
-        dataRow("V_REL", buf, t.textValue);
-        if (ap.vInfinityKms) {
-            std::snprintf(buf, sizeof buf, "%.2f KM/S", *ap.vInfinityKms);
-            dataRow("V_INF", buf, t.textValue);
+        if (f) {
+            const neo::CloseApproach& ap = view.dataset->approaches()[f->approach];
+            dataRow("DATE (TDB)", neo::formatJulianDate(f->tcaJd).c_str(), t.textValue);
+            dataRow("NOMINAL", distanceText(ap.distanceAU).c_str(), t.textValue);
+            dataRow("MIN (3\xCF\x83)", distanceText(ap.distanceMinAU).c_str(), t.textValue);
+            dataRow("MAX (3\xCF\x83)", distanceText(ap.distanceMaxAU).c_str(), t.textValue);
+            if (ap.distRangeDerived) {
+                TinyText("  MIN/MAX WERE ABSENT: THE NOMINAL DISTANCE STANDS IN", t.textMicro);
+            }
+            std::snprintf(buf, sizeof buf, "%.2f KM/S", ap.relVelocityKms);
+            dataRow("V_REL", buf, t.textValue);
+            if (ap.vInfinityKms) {
+                std::snprintf(buf, sizeof buf, "%.2f KM/S", *ap.vInfinityKms);
+                dataRow("V_INF", buf, t.textValue);
+            } else {
+                dataRow("V_INF", "NOT PROVIDED", t.textLabel);
+            }
         } else {
-            dataRow("V_INF", "NOT PROVIDED", t.textLabel);
+            if (view.haveState) {
+                dataRow("FROM EARTH NOW", distanceText(sim::length(view.objectAu - view.earthAu)).c_str(), t.textValue);
+            }
+            // The next approach in the data after the simulation date.
+            const neo::CloseApproach* next = nullptr;
+            for (const neo::CloseApproach& ap : view.dataset->approachesOf(view.selectedRecord)) {
+                if (ap.jdTdb > view.jdNow) {
+                    next = &ap;
+                    break;
+                }
+            }
+            if (next) {
+                dataRow("NEXT APPROACH", neo::formatJulianDate(next->jdTdb).c_str(), t.textValue);
+                dataRow("  NOMINAL", distanceText(next->distanceAU).c_str(), t.textValue);
+                std::snprintf(buf, sizeof buf, "%.2f KM/S", next->relVelocityKms);
+                dataRow("  V_REL", buf, t.textValue);
+            } else {
+                dataRow("NEXT APPROACH", "NONE AFTER THIS DATE", t.textLabel);
+            }
         }
 
         if (a.physical.diameterKm) {
@@ -526,10 +560,34 @@ void drawAsteroidTarget(const EarthUiState& ui, const NeoPanelView& view) {
         if (!a.classification.orbitClass.empty()) {
             dataRow("ORBIT CLASS", a.classification.orbitClass.c_str(), t.textValue);
         }
-        std::snprintf(buf, sizeof buf, "%u OF %u ON RECORD", f->ordinal + 1, record->approachCount);
+        if (!f) {
+            const neo::OrbitalProperties& o = a.orbital;
+            std::snprintf(buf, sizeof buf, "a %.3f AU \xC2\xB7 e %.3f \xC2\xB7 i %.1f\xC2\xB0", o.semiMajorAxisAU, o.eccentricity,
+                          o.inclinationDeg);
+            dataRow("ORBIT", buf, t.textValue);
+            std::snprintf(buf, sizeof buf, "q %.3f \xC2\xB7 Q %.3f AU", o.semiMajorAxisAU * (1.0 - o.eccentricity),
+                          o.semiMajorAxisAU * (1.0 + o.eccentricity));
+            dataRow("PERI \xC2\xB7 APHELION", buf, t.textValue);
+            if (o.periodDays) {
+                std::snprintf(buf, sizeof buf, "%.2f YR", *o.periodDays / 365.25);
+                dataRow("PERIOD", buf, t.textValue);
+            }
+            if (o.moidAU) {
+                std::snprintf(buf, sizeof buf, "%.4f AU \xC2\xB7 %.1f LD", *o.moidAU, *o.moidAU / neo::kLunarDistanceAU);
+                dataRow("EARTH MOID", buf, t.textValue);
+            }
+        }
+        std::snprintf(buf, sizeof buf, "%u ON RECORD", record->approachCount);
+        if (f) {
+            std::snprintf(buf, sizeof buf, "%u OF %u ON RECORD", f->ordinal + 1, record->approachCount);
+        }
         dataRow("APPROACH", buf, t.textValue);
         ImGui::Dummy(ImVec2(0.0f, 3.0f * s));
-        TinyText("PATH DIRECTION IS SCHEMATIC (DESIGNATION HASH)", t.textMicro);
+        if (f) {
+            TinyText("PATH DIRECTION IS SCHEMATIC (DESIGNATION HASH)", t.textMicro);
+        } else if (view.solarView) {
+            TinyText("TWO-BODY ORBIT FROM THE OBJECT'S OWN ELEMENTS", t.textMicro);
+        }
     }
     EndPanel();
 }

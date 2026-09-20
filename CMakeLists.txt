@@ -107,6 +107,12 @@ add_library(solsim_neo STATIC
     src/neo/query/NeoService.cpp
     src/neo/sim/EarthFlybys.h
     src/neo/sim/EarthFlybys.cpp
+    src/neo/sim/SwarmSelection.h
+    src/neo/sim/SwarmSelection.cpp
+    src/neo/sim/SwarmField.h
+    src/neo/sim/SwarmField.cpp
+    src/neo/sim/SwarmLegend.h
+    src/neo/sim/SwarmLegend.cpp
     src/neo/ingest/ParseReport.h
     src/neo/ingest/ParseReport.cpp
     src/neo/ingest/SbdbParser.h
@@ -170,6 +176,7 @@ set(SOLSIM_APP_SOURCES
     src/app/Application.h
     src/app/Application.cpp
     src/app/EarthView.cpp
+    src/app/SwarmView.cpp
     src/app/Window.h
     src/app/Window.cpp
     src/app/Input.h
@@ -212,6 +219,10 @@ set(SOLSIM_APP_SOURCES
     src/render/Texture.cpp
     src/render/EarthRenderer.h
     src/render/EarthRenderer.cpp
+    src/render/SwarmRenderer.h
+    src/render/SwarmRenderer.cpp
+    src/render/SwarmPick.h
+    src/render/SwarmPick.cpp
     src/style/SceneStyle.h
     src/style/Palette.h
     src/hud/Theme.h
@@ -309,6 +320,7 @@ if(SOLSIM_BUILD_TESTS)
         src/render/Camera.cpp
         src/render/ScaleMapper.cpp
         src/render/Picking.cpp
+        src/render/SwarmPick.cpp
         src/render/Starfield.cpp
         src/render/EclipticGrid.cpp
         src/render/ReactorStructure.cpp)
@@ -394,4 +406,14 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_earthview_tests)
     set_target_properties(neo_earthview_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_earthview_tests COMMAND neo_earthview_tests)
+
+    # NEOS layer: selection presets, propagation against sim::propagate, the node grid.
+    add_executable(neo_swarm_tests tests/neo_swarm_tests.cpp)
+    target_link_libraries(neo_swarm_tests PRIVATE solsim_neo)
+    if(MINGW)
+        target_link_options(neo_swarm_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_swarm_tests)
+    set_target_properties(neo_swarm_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_swarm_tests COMMAND neo_swarm_tests)
 endif()

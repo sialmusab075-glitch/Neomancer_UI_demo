@@ -1,0 +1,33 @@
+{
+  "fixture": "sbdb_neo_page.json",
+  "api": "SBDB Query API",
+  "doc": "https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html",
+  "url": "https://ssd-api.jpl.nasa.gov/sbdb_query.api?fields=spkid,full_name,pdes,name,kind,neo,pha,class,orbit_id,epoch,e,a,q,i,om,w,ma,n,per,moid,condition_code,H,diameter,diameter_sigma,albedo,rot_per&full-prec=1&sb-cdata=%7B%22AND%22%3A%5B%7B%22OR%22%3A%5B%22pdes%7CEQ%7C809875%22%2C%22pdes%7CEQ%7C163373%22%2C%22pdes%7CEQ%7C889795%22%2C%22pdes%7CEQ%7C363599%22%2C%22pdes%7CEQ%7C52768%22%2C%22pdes%7CEQ%7C438908%22%2C%22pdes%7CEQ%7C388945%22%2C%22pdes%7CEQ%7C136795%22%2C%22pdes%7CEQ%7C163348%22%2C%22pdes%7CEQ%7C441987%22%2C%22pdes%7CEQ%7C465824%22%2C%22pdes%7CEQ%7C153201%22%2C%22pdes%7CEQ%7C433%22%2C%22pdes%7CEQ%7C99942%22%2C%22pdes%7CEQ%7C2P%22%2C%22pdes%7CRE%7C%5E2020.AN3%24%22%2C%22pdes%7CRE%7C%5E2020.DT3%24%22%2C%22pdes%7CRE%7C%5E2020.GA2%24%22%2C%22pdes%7CRE%7C%5E2020.DM4%24%22%2C%22pdes%7CRE%7C%5E2000.KA%24%22%2C%22pdes%7CRE%7C%5E2020.ND%24%22%2C%22pdes%7CRE%7C%5E2020.RC%24%22%2C%22pdes%7CRE%7C%5E2017.U1%24%22%5D%7D%5D%7D",
+  "why": "23 objects chosen so the parser tests hit every case",
+  "composition": {
+    "433": "NEO, not a PHA, measured diameter 16.84 km",
+    "99942": "PHA with 28 approaches in cad_apophis.json (several-approaches case)",
+    "from cad_pha_window.json": "19 of its 22 designations, so the pdes join has real matches",
+    "deliberately absent": [
+      "2019 UO",
+      "2020 FM6",
+      "2020 ST1"
+    ],
+    "absent_reason": "these three appear in cad_pha_window.json only, to test the unmatched-CAD-row count",
+    "2P": "comet (kind cn) with H = null, tests the null-H and comet paths",
+    "2017 U1": "hyperbolic (e = 1.2011, class HYA, negative a, per = null): unsupported for propagation"
+  },
+  "notes": [
+    "full-prec=1: values are full precision, not display precision.",
+    "sb-cdata uses a nested OR inside AND; a top-level OR returns HTTP 502 from the server.",
+    "EQ arguments reject spaces, so designations with a space use RE with . in place of the space.",
+    "spkid arrives as a JSON number; every other value is a string or null."
+  ],
+  "fetched_utc": "2026-09-20T05:26:27Z",
+  "signature": {
+    "version": "1.0",
+    "source": "NASA/JPL SBDB (Small-Body DataBase) Query API"
+  },
+  "row_count": 23,
+  "reported_count": 23
+}

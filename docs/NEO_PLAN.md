@@ -55,7 +55,7 @@ extensions, no variable-length arrays, explicit casts, no anonymous structs.
 
 | Dependency | Version | How | Licence |
 |---|---|---|---|
-| nlohmann/json | 3.12.0 | vendored single header, `external/json/json.hpp` | MIT |
+| nlohmann/json | 3.12.0 | vendored single header, `external/json/nlohmann/json.hpp` | MIT |
 | SQLite amalgamation | 3.53.4 | vendored `external/sqlite/sqlite3.c/.h`, built as a silenced target | public domain |
 | WinHTTP | Windows SDK | system library, behind `IHttpClient` | system component |
 
@@ -64,19 +64,97 @@ is downloaded at build time.
 
 ## 3. Data model
 
-`src/neo/model`, following the context document, with the review fixes applied.
+`src/neo/model`, as implemented in stage 2.
 
 ```
-DateTime          Julian Date (TDB) as a double + display formatting
-PhysicalProperties  optional: diameterKm (measured), diameterSigmaKm, H, albedo,
-                    rotationPeriodHours; plus estimatedDiameterKm (derived from H)
-OrbitalProperties   orbitId, epochJd, e, a_AU, q_AU, i, om, w, ma, n, period, moid_AU
-ObjectClassification kind (asteroid/comet), isNEO, isPHA, orbitClass
-Asteroid          pdes (canonical), spkid, fullname, physical, orbital, classification
-CloseApproach     objectIndex, orbitId, jdTdb, distAU, distMinAU, distMaxAU,
-                  vRelKms, vInfKms, optional H, optional diameter
-AsteroidRecord    Asteroid + [firstApproach, approachCount) into the flat approach vector
+Asteroid              pdes (canonical key), spkid, name, fullName,
+                      PhysicalProperties, OrbitalProperties, ObjectClassification
+PhysicalProperties    all optional: diameterKm (measured only), diameterSigmaKm,
+                      absoluteMagnitudeH, albedo, rotationPeriodHours
+                      + estimatedDiameterKm() and bestDiameterKm(), both derived
+OrbitalProperties     orbitId, epochJdTdb, eccentricity, semiMajorAxisAU,
+                      perihelionAU, inclinationDeg, ascendingNodeDeg,
+                      argPerihelionDeg, meanAnomalyDeg, meanMotionDegPerDay,
+                      optional periodDays / moidAU / conditionCode,
+                      propagationSupported()
+ObjectClassification  kind (Asteroid/Comet/Unknown), numbered,
+                      isNEO / isPHA as std::optional<bool>, orbitClass
+CloseApproach         objectIndex, jdTdb, distanceAU, distanceMinAU, distanceMaxAU,
+                      relVelocityKms, vInfinityKms, optional H / diameter / sigma
+ParsedApproach        designation + orbitId + CloseApproach, before the join
+AsteroidRecord        Asteroid + [firstApproach, firstApproach + approachCount)
+Dataset               records() + approaches() + find(pdes) / findBySpkId(spkid)
+                      + approachesOf(index) -> ApproachSpan
 ```
+
+`CloseApproach` is 104 bytes on this toolchain (measured in `neo_tests`) and
+trivially copyable, with no strings: there can be millions of them, and every
+index built later stores `uint32_t` offsets into the one flat vector. At ~104 B
+per row, 1M approaches cost ~104 MB, which is the figure the stage 7 memory
+experiment reports; the three `std::optional<double>` members are 48 B of that
+and are the first thing to pack if it ever matters.
+
+### Field mapping: SBDB Query API -> C++
+
+Requested with `full-prec=1`. Everything arrives as a JSON string or null,
+except `spkid`, which is a JSON number.
+
+| JPL field | C++ member | Unit / type | Notes |
+|---|---|---|---|
+| `pdes` | `Asteroid::pdes` | string | canonical key; a row without it is rejected |
+| `spkid` | `Asteroid::spkid` | string | secondary index; numeric in the payload |
+| `name` | `Asteroid::name` | string | empty when unnamed (18 of 23 fixture objects) |
+| `full_name` | `Asteroid::fullName` | string | kept verbatim, leading spaces included |
+| `kind` | `classification.kind`, `.numbered` | enum + bool | `an` / `au` / `cn` / `cu` |
+| `neo` | `classification.isNEO` | `optional<bool>` | `Y`/`N`/null; null stays empty |
+| `pha` | `classification.isPHA` | `optional<bool>` | null for comets |
+| `class` | `classification.orbitClass` | string | `APO`, `ATE`, `AMO`, `HYA`, `ETc`, ... |
+| `orbit_id` | `orbital.orbitId` | string | solution id (`659`, `JPL 16`) |
+| `epoch` | `orbital.epochJdTdb` | JD (TDB) | epoch of osculation |
+| `e` | `orbital.eccentricity` | — | `>= 1` means no propagation |
+| `a` | `orbital.semiMajorAxisAU` | AU | negative for hyperbolic orbits |
+| `q` | `orbital.perihelionAU` | AU | |
+| `i` | `orbital.inclinationDeg` | deg | to the ecliptic |
+| `om` | `orbital.ascendingNodeDeg` | deg | Omega |
+| `w` | `orbital.argPerihelionDeg` | deg | omega |
+| `ma` | `orbital.meanAnomalyDeg` | deg | at `epoch`, not at J2000 |
+| `n` | `orbital.meanMotionDegPerDay` | deg/day | used as published for the epoch shift |
+| `per` | `orbital.periodDays` | days, optional | null for hyperbolic orbits |
+| `moid` | `orbital.moidAU` | AU, optional | Earth MOID |
+| `condition_code` | `orbital.conditionCode` | int 0–9, optional | 0 = best determined |
+| `H` | `physical.absoluteMagnitudeH` | mag, optional | comets usually have none |
+| `diameter` | `physical.diameterKm` | km, optional | **measured only** |
+| `diameter_sigma` | `physical.diameterSigmaKm` | km, optional | |
+| `albedo` | `physical.albedo` | —, optional | used by the estimate when present |
+| `rot_per` | `physical.rotationPeriodHours` | h, optional | |
+
+A row is rejected (counted, reason recorded, never guessed at) when `pdes` is
+missing or when any of `epoch, e, a, q, i, om, w, ma, n` is missing or
+non-numeric, because such a row can be neither keyed nor propagated.
+
+### Field mapping: Close Approach Data API -> C++
+
+Requested with `diameter=true&fullname=true`.
+
+| JPL field | C++ member | Unit / type | Notes |
+|---|---|---|---|
+| `des` | `ParsedApproach::designation` | string | joins to `pdes`, then dropped |
+| `orbit_id` | `ParsedApproach::orbitId` | string | dropped after the join (see below) |
+| `jd` | `CloseApproach::jdTdb` | JD (TDB) | required |
+| `cd` | — | — | not stored; formatted from `jd` on display |
+| `dist` | `distanceAU` | AU | required |
+| `dist_min` | `distanceMinAU` | AU | falls back to `dist` if absent |
+| `dist_max` | `distanceMaxAU` | AU | falls back to `dist` if absent |
+| `v_rel` | `relVelocityKms` | km/s | relative to the approach body |
+| `v_inf` | `vInfinityKms` | km/s | falls back to `v_rel` if absent |
+| `t_sigma_f` | — | — | not stored in v1 |
+| `h` | `absoluteMagnitudeH` | mag, optional | |
+| `diameter`, `diameter_sigma` | `diameterKm`, `diameterSigmaKm` | km, optional | null when unknown |
+| `fullname` | — | — | not stored; SBDB `full_name` is authoritative |
+
+CAD's `orbit_id` is dropped after the join: the object already stores the
+current solution id, and a string per approach would cost ~32 bytes times
+millions of rows for information no query uses.
 
 ### Identifiers and the join
 
@@ -205,7 +283,7 @@ page size, and memory for the master vector and each index.
 | Stage | Goal | Status |
 |---|---|---|
 | 1 | Plan + dependencies + licences | **done** |
-| 2 | Model + JSON parsing from fixtures + tests | not started |
+| 2 | Model + JSON parsing from fixtures + tests | **done** (97 checks in `neo_tests`) |
 | 3 | `neo_ingest`: real download, paging, cache, validation report | not started |
 | 4 | SQLite schema + save/load + tests | not started |
 | 5 | DSA structures + unit tests | not started |
@@ -225,3 +303,51 @@ page size, and memory for the master vector and each index.
 6. SBDB `n` is requested and used for the epoch shift instead of deriving it from `a`.
 7. CAD v1 window 1950–2150 at 0.05 AU, with the wider range behind flags.
 8. Dependencies pinned: nlohmann/json 3.12.0, SQLite 3.53.4, WinHTTP.
+
+### Stage 2 — decisions recorded
+
+1. **Signature versions** are per API and compiled in: SBDB `1.0`, CAD `1.5`.
+   A different version fails the whole payload with an error naming both
+   versions and the API doc URL. The check is overridable in `ParseOptions` so
+   a test can prove the rejection comes from the check, not from bad data.
+2. **Parsing never throws across its boundary.** A bad payload is an expected
+   outcome (truncated download, error document, changed version), so it returns
+   a `ParseStatus`. Row-level defects are counted in a `ValidationReport`
+   (per-column null counts, rejection reasons, capped samples) and never abort
+   a page.
+3. **nlohmann/json is confined** to `src/neo/ingest/detail/JsonTable.*`, which
+   only `.cpp` files include. No public header exposes it.
+4. **Absent is not zero, but missing optional CAD columns get a documented
+   fallback:** `dist_min`/`dist_max` fall back to `dist`, `v_inf` to `v_rel`,
+   so a range query can never match a spurious 0 AU or 0 km/s. Physical values
+   (diameter, H, albedo) never get a fallback; they stay empty.
+5. **The join** resolves designations, then sorts the matched rows once by
+   `(objectIndex, jdTdb)`. That single O(n log n) sort produces both the
+   contiguous per-record range and chronological order inside it. Unmatched
+   rows are dropped and reported with per-designation counts (sample capped at
+   20, true total kept).
+6. **Estimated diameter** uses a measured albedo when SBDB has one, otherwise
+   `p = 0.14`. `bestDiameterKm()` prefers the measured value; the two are never
+   merged in storage.
+7. `Dataset::find()` currently wraps `std::unordered_map`. Stage 5 swaps in
+   `neo::HashMap` behind the same signature; callers only ever see indices.
+
+### JPL API behaviour found while building the fixtures
+
+- A **top-level `"OR"`** in `sb-cdata` returns HTTP 502. The documented nested
+  form, `{"AND":[{"OR":[...]}]}`, works.
+- `EQ` **rejects spaces** in an argument, so designations such as `2020 AN3`
+  must be matched with `RE` (`pdes|RE|^2020.AN3$`).
+- `spkid` is a **JSON number**; every other SBDB value is a string or null.
+- Broad filters (`H|ND` over the whole NEO group) and even some ordinary window
+  queries return **intermittent 502s**. The ingest tool must retry with backoff
+  and cache successful responses.
+
+### Fixtures (`tests/fixtures/`, each with a `.meta.json`)
+
+| File | Rows | What it covers |
+|---|---|---|
+| `sbdb_neo_page.json` | 23 objects | PHAs, measured diameter (433, 2P), null diameter (15), null H and comet (2P), hyperbolic with negative `a` and null `per` (2017 U1), null NEO/PHA flags |
+| `cad_pha_window.json` | 22 approaches | a realistic one-year PHA window; 3 designations deliberately absent from the SBDB fixture |
+| `cad_apophis.json` | 28 approaches | one object with many encounters, including 2029-04-13 at 0.000254 au |
+| `sbdb_bad_signature.json` | 2 objects | synthetic: `signature.version` changed to `9.9`, must be refused |

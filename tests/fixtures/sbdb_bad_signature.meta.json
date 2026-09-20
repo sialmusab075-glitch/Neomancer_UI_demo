@@ -1,0 +1,8 @@
+{
+  "fixture": "sbdb_bad_signature.json",
+  "synthetic": true,
+  "derived_from": "sbdb_neo_page.json",
+  "edit": "signature.version changed from 1.0 to 9.9, data truncated to 2 rows",
+  "why": "JPL warns that a signature version other than the documented one means the format is not guaranteed; the parser must refuse it with a clear error instead of guessing",
+  "fetched_utc": null
+}

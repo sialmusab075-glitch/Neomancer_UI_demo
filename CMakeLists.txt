@@ -67,6 +67,33 @@ solsim_set_warnings(solsim_sim)
 set_target_properties(solsim_sim PROPERTIES FOLDER "solsim")
 
 # ---------------------------------------------------------------------------
+# NEO data layer: model, ingestion (parsing), storage, DSA, queries.
+# Pure C++17 plus nlohmann/json and (later) SQLite. No OpenGL, ImGui or GLM, so
+# the CLI tools and the tests link it without creating a window. It depends on
+# solsim_sim for the Kepler solver and the calendar conversion.
+# ---------------------------------------------------------------------------
+add_library(solsim_neo STATIC
+    src/neo/model/Asteroid.h
+    src/neo/model/Asteroid.cpp
+    src/neo/model/CloseApproach.h
+    src/neo/model/Dataset.h
+    src/neo/model/Dataset.cpp
+    src/neo/model/JulianDate.h
+    src/neo/model/JulianDate.cpp
+    src/neo/ingest/ParseReport.h
+    src/neo/ingest/ParseReport.cpp
+    src/neo/ingest/SbdbParser.h
+    src/neo/ingest/SbdbParser.cpp
+    src/neo/ingest/CadParser.h
+    src/neo/ingest/CadParser.cpp
+    src/neo/ingest/detail/JsonTable.h
+    src/neo/ingest/detail/JsonTable.cpp)
+target_include_directories(solsim_neo PUBLIC src)
+target_link_libraries(solsim_neo PUBLIC solsim_sim PRIVATE nlohmann_json)
+solsim_set_warnings(solsim_neo)
+set_target_properties(solsim_neo PROPERTIES FOLDER "neo")
+
+# ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -214,4 +241,18 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(render_tests)
     set_target_properties(render_tests PROPERTIES FOLDER "solsim")
     add_test(NAME render_tests COMMAND render_tests)
+
+    # NEO data layer: parsing, join and date helpers against saved JPL fixtures.
+    # The fixture directory is compiled in so ctest can run from any working
+    # directory; argv[1] overrides it.
+    add_executable(neo_tests tests/neo_tests.cpp)
+    target_link_libraries(neo_tests PRIVATE solsim_neo)
+    target_compile_definitions(neo_tests PRIVATE
+        NEO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    if(MINGW)
+        target_link_options(neo_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_tests)
+    set_target_properties(neo_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_tests COMMAND neo_tests)
 endif()

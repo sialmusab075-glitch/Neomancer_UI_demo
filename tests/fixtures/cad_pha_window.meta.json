@@ -1,0 +1,26 @@
+{
+  "fixture": "cad_pha_window.json",
+  "api": "Close Approach Data API",
+  "doc": "https://ssd-api.jpl.nasa.gov/doc/cad.html",
+  "url": "https://ssd-api.jpl.nasa.gov/cad.api?date-min=2020-01-01&date-max=2021-01-01&dist-max=0.05&pha=true&diameter=true&fullname=true&sort=date&limit=45",
+  "why": "22 PHA encounters in one year, a realistic window page with a mix of measured and null diameters",
+  "composition": {
+    "matched_by_sbdb_fixture": 19,
+    "unmatched_by_design": [
+      "2019 UO",
+      "2020 FM6",
+      "2020 ST1"
+    ]
+  },
+  "notes": [
+    "diameter=true and fullname=true are requested, so diameter, diameter_sigma and fullname columns exist (mostly null).",
+    "This exact query intermittently returns HTTP 502; the saved response is a successful 200."
+  ],
+  "fetched_utc": "2026-09-20T05:26:27Z",
+  "signature": {
+    "source": "NASA/JPL SBDB Close Approach Data API",
+    "version": "1.5"
+  },
+  "row_count": 22,
+  "reported_count": 22
+}

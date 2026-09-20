@@ -172,6 +172,15 @@ private:
 // detail for something no longer shown). `wasChecked` is its state before the change; a
 // selected row that was already unchecked (selected by clicking it) is left alone by later
 // changes to other rows. Returns the selection to keep: `selected`, or -1.
+// A NEW result has arrived: every flyby checked, nothing selected, nothing hovered. The
+// application calls this from the single place results are adopted, so the startup default
+// query (run automatically on the first visit) and every RUN get exactly the same state.
+inline void resetForNewResult(FlybyChecks& checks, int& selected, int& hovered, std::size_t flybyCount) {
+    checks.reset(flybyCount);
+    selected = -1;
+    hovered = -1;
+}
+
 inline int selectionAfterCheckChange(int selected, bool wasChecked, const FlybyChecks& now) {
     return selected >= 0 && wasChecked && !now.checked(static_cast<std::size_t>(selected)) ? -1 : selected;
 }

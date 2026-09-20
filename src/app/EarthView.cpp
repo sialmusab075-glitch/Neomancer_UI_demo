@@ -303,9 +303,7 @@ void Application::adoptOutcome(neo::NeoOutcome&& outcome) {
     outcome_ = std::move(outcome);
     haveOutcome_ = true;
     outcomeFrame_ = frameIndex_;
-    earthUi_.selected = -1;
-    earthUi_.hovered = -1;
-    earthUi_.checks.reset(outcome_.ok ? outcome_.scene.flybys.size() : 0); // a new result: everything checked
+    neo::resetForNewResult(earthUi_.checks, earthUi_.selected, earthUi_.hovered, outcome_.ok ? outcome_.scene.flybys.size() : 0);
     if (!devChecks_.empty()) { // dev hook, for scripted screenshots: start with some rows unchecked
         const std::size_t n = earthUi_.checks.size();
         const int arg = devChecks_.find(':') != std::string::npos ? std::atoi(devChecks_.c_str() + devChecks_.find(':') + 1) : 0;
@@ -335,9 +333,13 @@ void Application::adoptOutcome(neo::NeoOutcome&& outcome) {
     scene_.setFlybyScene(outcome_.scene); // the only place the path meshes are rebuilt
     logLine("NEO QUERY \xC2\xB7 " + outcome_.summary, hud::LogKind::System);
     if (!outcome_.scene.flybys.empty()) {
-        selectFlyby(bestFlybyOfFirstObject(), true);
+        // The default query is run on the first visit, so its result usually arrives during the fade,
+        // while the SOLAR view is still up: selecting must not jump the clock then (commitEnterEarth
+        // saves the solar date, and would save the jumped one). It jumps at the swap instead.
+        const bool jump = earthSceneShown();
+        selectFlyby(bestFlybyOfFirstObject(), jump);
         if (devSelect_ >= 0) {
-            selectFlyby(devSelect_, true);
+            selectFlyby(devSelect_, jump);
         }
     }
 }

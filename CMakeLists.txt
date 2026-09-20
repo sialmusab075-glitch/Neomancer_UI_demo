@@ -101,6 +101,12 @@ add_library(solsim_neo STATIC
     src/neo/query/IndexSet.cpp
     src/neo/query/QueryEngine.h
     src/neo/query/QueryEngine.cpp
+    src/neo/query/FilterState.h
+    src/neo/query/FilterState.cpp
+    src/neo/query/NeoService.h
+    src/neo/query/NeoService.cpp
+    src/neo/sim/EarthFlybys.h
+    src/neo/sim/EarthFlybys.cpp
     src/neo/ingest/ParseReport.h
     src/neo/ingest/ParseReport.cpp
     src/neo/ingest/SbdbParser.h
@@ -163,6 +169,7 @@ set(SOLSIM_APP_SOURCES
     src/main.cpp
     src/app/Application.h
     src/app/Application.cpp
+    src/app/EarthView.cpp
     src/app/Window.h
     src/app/Window.cpp
     src/app/Input.h
@@ -200,6 +207,11 @@ set(SOLSIM_APP_SOURCES
     src/render/PostProcess.cpp
     src/render/ReactorStructure.h
     src/render/ReactorStructure.cpp
+    src/render/FrameViewport.h
+    src/render/Texture.h
+    src/render/Texture.cpp
+    src/render/EarthRenderer.h
+    src/render/EarthRenderer.cpp
     src/style/SceneStyle.h
     src/style/Palette.h
     src/hud/Theme.h
@@ -214,6 +226,8 @@ set(SOLSIM_APP_SOURCES
     src/hud/TitleBar.cpp
     src/hud/Controls.cpp
     src/hud/PlanetPanel.cpp
+    src/hud/EarthUi.h
+    src/hud/EarthPanels.cpp
     src/hud/DataGrid.cpp
     src/hud/HistoryPlot.h
     src/hud/HistoryPlot.cpp
@@ -230,6 +244,7 @@ endif()
 add_executable(solsim ${SOLSIM_APP_SOURCES})
 target_link_libraries(solsim PRIVATE
     solsim_sim
+    solsim_neo
     glad
     imgui
     implot
@@ -240,6 +255,8 @@ target_compile_definitions(solsim PRIVATE
     GLFW_INCLUDE_NONE
     NOMINMAX
     WIN32_LEAN_AND_MEAN)
+# stb_image (public domain / MIT) is a single header, vendored in external/stb.
+target_include_directories(solsim SYSTEM PRIVATE external/stb)
 solsim_set_warnings(solsim)
 set_target_properties(solsim PROPERTIES
     FOLDER "solsim"
@@ -367,4 +384,14 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_query_tests)
     set_target_properties(neo_query_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_query_tests COMMAND neo_query_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Earth view: query -> flyby mapping, the filter form, and the async service.
+    add_executable(neo_earthview_tests tests/neo_earthview_tests.cpp)
+    target_link_libraries(neo_earthview_tests PRIVATE solsim_neo)
+    if(MINGW)
+        target_link_options(neo_earthview_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_earthview_tests)
+    set_target_properties(neo_earthview_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_earthview_tests COMMAND neo_earthview_tests)
 endif()

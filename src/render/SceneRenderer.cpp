@@ -87,10 +87,14 @@ bool SceneRenderer::init(std::string& error) {
     sunParticles_.create(generateSunParticles(kSunParticles, 0x50u));
     haloCircle_.create(generateUnitCircle(128));
     crown_.create(generateCrown(72));
+
+    // The Earth view is optional: if its shaders fail, the solar view still works.
+    earthReady_ = earth_.init(earthError_);
     return true;
 }
 
 void SceneRenderer::destroy() {
+    earth_.destroy();
     post_.destroy();
     orbits_.destroy();
     grid_.destroy();
@@ -279,26 +283,7 @@ void SceneRenderer::drawScene(const sim::SolarSystem& system, const ScaleMapper&
 
     // --- starfield: at infinity, additive, no depth (so no depth fade either) --------
     if (layers.stars) {
-        glDisable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);
-        pointShader_.use();
-        pointShader_.set("uView", view);
-        pointShader_.set("uProj", proj);
-        pointShader_.set("uModel", glm::mat4(1.0f));
-        pointShader_.set("uInfinite", 1.0f);
-        pointShader_.set("uPixelScale", vp.dpiScale);
-        pointShader_.set("uIntensity", 0.80f);
-        pointShader_.set("uTime", time);
-        pointShader_.set("uEye", eye);
-        pointShader_.set("uFacing", 0.0f);
-        pointShader_.set("uFlicker", 0.10f); // faint twinkle
-        pointShader_.set("uMode", kModeStars);
-        pointShader_.set("uRampLow", rgb(st.starCool));
-        pointShader_.set("uRampMid", rgb(st.starMid));
-        pointShader_.set("uRampHigh", rgb(st.starWarm));
-        stars_.draw();
+        drawStarfield(view, proj, eye, vp, time, st);
     }
 
     glEnable(GL_DEPTH_TEST);
@@ -498,6 +483,75 @@ void SceneRenderer::drawScene(const sim::SolarSystem& system, const ScaleMapper&
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_PROGRAM_POINT_SIZE);
+}
+
+
+void SceneRenderer::drawStarfield(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& eye,
+                                  const FrameViewport& vp, float time, const style::SceneStyle& st) const {
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    pointShader_.use();
+    pointShader_.set("uView", view);
+    pointShader_.set("uProj", proj);
+    pointShader_.set("uModel", glm::mat4(1.0f));
+    pointShader_.set("uInfinite", 1.0f);
+    pointShader_.set("uPixelScale", vp.dpiScale);
+    pointShader_.set("uIntensity", 0.80f);
+    pointShader_.set("uTime", time);
+    pointShader_.set("uEye", eye);
+    pointShader_.set("uFacing", 0.0f);
+    pointShader_.set("uFlicker", 0.10f); // faint twinkle
+    pointShader_.set("uMode", kModeStars);
+    pointShader_.set("uRampLow", rgb(st.starCool));
+    pointShader_.set("uRampMid", rgb(st.starMid));
+    pointShader_.set("uRampHigh", rgb(st.starWarm));
+    stars_.draw();
+}
+
+void SceneRenderer::renderEarth(const EarthFrame& frame, const SceneLayers& layers, double timeSeconds,
+                                const style::SceneStyle& st) {
+    const FrameViewport& vp = frame.viewport;
+    const glm::vec3 bg = rgb(st.bgMid);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, static_cast<GLsizei>(vp.framebufferPx.x), static_cast<GLsizei>(vp.framebufferPx.y));
+    glClearColor(bg.r, bg.g, bg.b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    const float k = vp.fbPerWindow();
+    const glm::vec2 viewFb = vp.viewSizeFb();
+    const int w = std::max(1, static_cast<int>(viewFb.x));
+    const int h = std::max(1, static_cast<int>(viewFb.y));
+    const int x = static_cast<int>(vp.viewMin.x * k);
+    const int y = static_cast<int>(vp.framebufferPx.y - (vp.viewMin.y + vp.viewSize.y) * k);
+    const glm::vec2 targetPx(static_cast<float>(w), static_cast<float>(h));
+    const float time = static_cast<float>(std::fmod(timeSeconds, 3600.0));
+
+    auto drawContents = [&]() {
+        drawBackground(vp, st);
+        if (layers.stars) {
+            drawStarfield(frame.camera->view(), frame.camera->projection(vp.aspect()), frame.camera->eyeOffset(), vp,
+                          time, st);
+        }
+        earth_.draw(frame, targetPx, timeSeconds, st);
+    };
+
+    if (post_.begin(w, h)) {
+        glClear(GL_DEPTH_BUFFER_BIT);
+        drawContents();
+        PostSettings ps;
+        ps.bloom = layers.bloom;
+        ps.finish = layers.finish;
+        ps.warmth = layers.warmth;
+        ps.shadowLift = rgb(st.gradeShadow) * st.gradeShadowLift;
+        ps.highlight = rgb(st.gradeHighlight);
+        ps.redLimit = st.gradeRedLimit;
+        post_.end(ps, x, y, static_cast<float>(std::fmod(timeSeconds, 1000.0)));
+    } else {
+        glViewport(x, y, w, h);
+        drawContents();
+    }
 }
 
 } // namespace render

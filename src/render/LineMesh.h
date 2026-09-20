@@ -20,6 +20,8 @@ public:
     void create(const std::vector<LineVertex>& vertices);
     void destroy();
     void draw() const;
+    // Draws only vertices [first, first + count): one path out of many sharing a buffer.
+    void drawRange(GLint first, GLsizei count) const;
 
 private:
     GLuint vao_ = 0;

@@ -35,6 +35,8 @@ public:
     void togglePause() { paused_ = !paused_; }
 
     void resetToEpoch() { t_days_ = epoch_days_; }
+    // Sets the time outright (Earth view: a jump to a flyby's closest approach).
+    void jumpTo(double t_days) { t_days_ = t_days; }
     // Steps by +/- days. Only acts while paused; returns whether it stepped.
     bool step(double days);
 

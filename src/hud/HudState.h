@@ -21,6 +21,11 @@ struct HudState {
     int   hudTheme = 0;        // hud::ThemeId (0 = REACTOR, 1 = OBSERVATORY)
     float fps = 0.0f;
     float dpiScale = 1.0f;
+
+    // Earth view: true while it is up (or the camera is flying into it).
+    bool  earthView = false;
+    // Text for the top strip's NEO DB entry, e.g. "42,666 OBJECTS / 42,819 APPROACHES".
+    char  neoStatus[96] = "";
 };
 
 constexpr double kHistoryWindowsDays[3] = {90.0, 365.0, 1826.0};
@@ -41,6 +46,14 @@ struct HudEvents {
     bool historyWindowChanged = false;
     bool clearLog = false;
     bool themeChanged = false;
+
+    // Earth view.
+    bool toggleEarthView = false;  // the EARTH VIEW / SOLAR VIEW button (or E)
+    bool runQuery = false;         // RUN in NEO FILTER
+    bool jumpNextApproach = false; // clock -> the next flyby's closest approach
+    bool resultPrev = false;       // select the previous / next result and jump to it
+    bool resultNext = false;
+    int  rowClicked = -1;          // a NEO RESULTS row was clicked: select it and jump to it
 };
 
 } // namespace hud

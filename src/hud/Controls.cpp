@@ -1,5 +1,6 @@
 #include "hud/Panels.h"
 #include "hud/Theme.h"
+#include "sim/BodyTable.h"
 #include "sim/SimClock.h"
 #include "sim/SolarSystem.h"
 
@@ -106,6 +107,21 @@ HudEvents drawControls(sim::SimClock& clock, const sim::SolarSystem& system, Hud
         if (Button(state.following ? "TRACKING" : "TRACK", hw, state.following)) {
             state.following = !state.following;
             ev.followChanged = true;
+        }
+
+        // --- Earth view: offered while the Earth is the target (or already in it) ----------
+        const int earthIndex = system.indexOfTableRow(sim::kEarth);
+        const bool earthSelected = earthIndex >= 0 && state.selected == earthIndex;
+        if (earthSelected || state.earthView) {
+            ImGui::Dummy(ImVec2(0.0f, 2.0f * dpi()));
+            if (Button(state.earthView ? "SOLAR VIEW  [E / ESC]" : "EARTH VIEW  [E]", ImGui::GetContentRegionAvail().x,
+                       state.earthView)) {
+                ev.toggleEarthView = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(state.earthView ? "Fly back out to the solar system"
+                                                  : "Fly in to the Earth and see near-Earth asteroid flybys");
+            }
         }
 
         // --- HUD theme: label and both choices on one row ---------------------------------

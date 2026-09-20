@@ -1,7 +1,9 @@
 #pragma once
 
 #include "render/Camera.h"
+#include "render/EarthRenderer.h"
 #include "render/EclipticGrid.h"
+#include "render/FrameViewport.h"
 #include "render/LineMesh.h"
 #include "render/OrbitRenderer.h"
 #include "render/Picking.h"
@@ -12,6 +14,8 @@
 #include "render/Shader.h"
 #include "render/SphereMesh.h"
 #include "style/SceneStyle.h"
+
+#include "neo/sim/EarthFlybys.h"
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -41,20 +45,6 @@ struct SceneLayers {
     bool bloom = true;  // HDR bloom pass
     bool finish = true; // vignette + animated noise in the composite
     float warmth = 0.6f; // colour grade strength (0..1)
-};
-
-// Window/framebuffer geometry for one frame. The 3D scene is drawn only into
-// the view rectangle (the HUD's central dock node), given in window coordinates.
-struct FrameViewport {
-    glm::vec2 framebufferPx{1.0f}; // GL framebuffer size
-    glm::vec2 windowPx{1.0f};      // ImGui / cursor coordinate space
-    glm::vec2 viewMin{0.0f};       // 3D view rectangle, window coordinates
-    glm::vec2 viewSize{1.0f};
-    float     dpiScale = 1.0f;
-
-    float fbPerWindow() const { return framebufferPx.y / windowPx.y; }
-    float aspect() const { return viewSize.x / viewSize.y; }
-    glm::vec2 viewSizeFb() const { return viewSize * fbPerWindow(); }
 };
 
 class SceneRenderer {
@@ -95,12 +85,27 @@ public:
     // False when the driver rejected the offscreen targets (no bloom/finish, no MSAA).
     bool postProcessingAvailable() const { return post_.available(); }
 
+    // --- Earth view: the same background, stars and HDR pipeline, a different scene ---
+    // False when the Earth shaders failed to build (the solar view is unaffected).
+    bool earthViewAvailable() const { return earthReady_; }
+    const std::string& earthError() const { return earthError_; }
+    bool hasEarthTexture() const { return earth_.hasTexture(); }
+    const std::string& earthTextureError() const { return earth_.textureError(); }
+    // Rebuilds the flyby path meshes; call only when the query result changes.
+    void setFlybyScene(const neo::FlybyScene& scene) { earth_.setScene(scene); }
+    void clearFlybyScene() { earth_.clearScene(); }
+    void renderEarth(const EarthFrame& frame, const SceneLayers& layers, double timeSeconds,
+                     const style::SceneStyle& style);
+
 private:
     void drawScene(const sim::SolarSystem& system, const ScaleMapper& mapper, const OrbitCamera& camera,
                    const std::vector<BodyVisual>& visuals, const FrameViewport& vp, glm::vec2 targetPx,
                    double timeSeconds, float timeDirection, const SceneLayers& layers, int selectedBody,
                    const style::SceneStyle& style) const;
     void drawBackground(const FrameViewport& vp, const style::SceneStyle& style) const;
+    // The starfield at infinity: additive, no depth. Shared by both views.
+    void drawStarfield(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& eye, const FrameViewport& vp,
+                       float time, const style::SceneStyle& style) const;
 
     Shader bodyShader_;
     Shader orbitShader_;
@@ -128,6 +133,10 @@ private:
     LineMesh crown_;      // unit tick crown, billboarded around the Sun
     std::vector<RingLabel> structureLabels_;
     float structureY_ = 0.0f;
+
+    EarthRenderer earth_;
+    bool earthReady_ = false;
+    std::string earthError_;
 };
 
 } // namespace render

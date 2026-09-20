@@ -115,6 +115,9 @@ struct QueryStats {
 
     // SQL-EXPLAIN-style text, ready to print or paste into a report.
     std::string explain() const;
+
+    // One line for a status area: driver, estimated vs actual candidates, matches, time.
+    std::string summaryLine() const;
 };
 
 struct QueryResult {

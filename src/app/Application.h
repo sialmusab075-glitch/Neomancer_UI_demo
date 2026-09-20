@@ -1,12 +1,16 @@
 #pragma once
 
 #include "app/Window.h"
+#include "hud/EarthUi.h"
 #include "hud/HistoryPlot.h"
 #include "hud/HudLayout.h"
 #include "hud/HudState.h"
 #include "hud/LogPanel.h"
 #include "hud/SceneOverlay.h"
+#include "neo/model/JulianDate.h"
+#include "neo/query/NeoService.h"
 #include "render/Camera.h"
+#include "render/EarthRenderer.h"
 #include "render/ScaleMapper.h"
 #include "render/SceneRenderer.h"
 #include "sim/EventDetector.h"
@@ -51,6 +55,34 @@ private:
     void drawHud(hud::HudEvents& ev);
     void applyHudEvents(const hud::HudEvents& ev, const render::FrameViewport& vp);
     void logStateChanges();
+
+    // --- Earth view (src/app/EarthView.cpp) ---------------------------------------------
+    enum class ViewMode { Solar, ToEarth, Earth, ToSolar };
+    bool earthSceneShown() const;             // the Earth scene is what is on screen this frame
+    bool viewTransitioning() const { return viewMode_ == ViewMode::ToEarth || viewMode_ == ViewMode::ToSolar; }
+    void initNeo();
+    void requestEarthToggle();
+    void beginEnterEarth(bool instant);
+    void beginLeaveEarth();
+    void commitEnterEarth();                  // at the midpoint of the transition: swap the world
+    void commitLeaveEarth();
+    void advanceViewMode(double realDt);
+    void updateTransitionCamera();            // the solar camera's flight to / from the Earth
+    void updateNeo();                         // status text, result pick-up, automatic first run
+    void submitFilter();
+    void adoptOutcome(neo::NeoOutcome&& outcome);
+    int bestFlybyOfFirstObject() const;
+    void selectFlyby(int index, bool jumpClock);
+    void jumpClockToJd(double jd);
+    void applyEarthEvents(const hud::HudEvents& ev);
+    void earthPicking(const render::FrameViewport& vp);
+    void drawEarthPanels(hud::HudEvents& ev);
+    hud::NeoPanelView neoPanelView() const;
+    double earthJd() const { return neo::julianDateFromDaysSinceJ2000(clock_.timeDays()); }
+    void frameEarthOverlay(const render::FrameViewport& vp, const hud::ViewRect& viewRect);
+    void drawViewFade(const hud::ViewRect& viewRect);
+    void renderEarthScene(const render::FrameViewport& vp, const render::SceneLayers& layers);
+    void frameSolarOverlay(const render::FrameViewport& vp, const render::OrbitCamera& cam);
 
     void setFollowing(bool follow);
     void applyScaleMode(bool trueScale);
@@ -100,6 +132,39 @@ private:
     bool        imguiReady_ = false;
     bool        sceneReady_ = false;
 
+    // Earth view state
+    ViewMode          viewMode_ = ViewMode::Solar;
+    float             transition_ = 0.0f;      // 0..1 through the current transition
+    bool              swapped_ = false;        // the midpoint swap of this transition has happened
+    render::OrbitCamera earthCam_;
+    render::OrbitCamera transCam_;             // the solar camera while it flies to / from the Earth
+    float             earthGoalDistance_ = 24.0f;
+    double            spinRadians_ = 0.0;      // Earth rotation: real time, never the sim clock
+    neo::NeoService   neo_;
+    hud::EarthUiState earthUi_;
+    neo::NeoOutcome   outcome_;                // the latest result: rows, flybys, EXPLAIN
+    bool              haveOutcome_ = false;
+    neo::SortField     submittedSort_ = neo::SortField::None; // the sort of the query the outcome answers
+    neo::SortDirection submittedDirection_ = neo::SortDirection::Ascending;
+    bool              autoRunPending_ = true;  // run the default query once, on first entry
+    std::string       neoMessage_;
+    std::vector<std::string> formErrors_;
+    std::vector<render::FlybyScreen> flybyLayout_;
+    std::vector<hud::OverlayBody> noBodies_;   // the Earth overlay draws ring captions only
+    char earthRingText_[8][48] = {};
+    neo::NeoService::State lastNeoState_ = neo::NeoService::State::Idle;
+    // Saved on entering, restored on leaving: the solar view comes back as it was.
+    bool   savedFollowing_ = false;
+    double savedClockDays_ = 0.0;
+    double savedClockScale_ = 0.0;
+    bool   savedPaused_ = false;
+    bool   startInEarth_ = false;              // dev hook
+    long   outcomeFrame_ = -1;
+    int    devSelect_ = -1;                    // dev hooks: a flyby to select / to show as hovered
+    int    devHover_ = -1;
+    long   devEnterFrame_ = -1;                // dev hooks: enter / leave the Earth view at a frame
+    long   devLeaveFrame_ = -1;
+
     // Previous-frame state, to log changes whatever caused them (mouse, keys, panels).
     int  prevSelected_ = -1;
     bool prevFollowing_ = false;
@@ -110,6 +175,7 @@ private:
     std::string screenshotPath_;
     int         screenshotFrame_ = 90;
     long        frameIndex_ = 0;
+    double      cpuFrameMs_ = 0.0; // frame() CPU time, smoothed (the vsync wait in swapBuffers is not in it)
 };
 
 } // namespace app

@@ -1383,6 +1383,18 @@ QueryResult QueryEngine::run(const Query& q, ExecMode mode, std::optional<Access
 // EXPLAIN
 // ---------------------------------------------------------------------------
 
+std::string QueryStats::summaryLine() const {
+    char buf[320];
+    if (mode == ExecMode::Naive) {
+        std::snprintf(buf, sizeof buf, "naive scan | %s objects matched | %.2f ms", commas(matchedObjects).c_str(), totalMs);
+    } else {
+        std::snprintf(buf, sizeof buf, "driver: %s | candidates est %.0f / actual %s | %s objects | %.2f ms",
+                      toString(driverAccess), estCandidates, commas(actualCandidates).c_str(),
+                      commas(matchedObjects).c_str(), totalMs);
+    }
+    return buf;
+}
+
 std::string QueryStats::explain() const {
     std::string out;
     char buf[512];

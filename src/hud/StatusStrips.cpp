@@ -99,7 +99,10 @@ void drawTopStrip(const sim::SimClock& clock, const HudState& state, unsigned se
         x = microPair(dl, x, yText, "SIM DATE", buf);
         x = microPair(dl, x, yText, "ELAPSED", sim::formatElapsed(clock.elapsedDays()).c_str());
         std::snprintf(buf, sizeof buf, "%+.2f D/S", clock.scale());
-        microPair(dl, x, yText, "RATE", buf);
+        x = microPair(dl, x, yText, "RATE", buf);
+        if (state.neoStatus[0] != '\0') {
+            microPair(dl, x, yText, "NEO DB", state.neoStatus);
+        }
 
         // Right: FPS, local time, and the run/hold chip.
         const char* chip = clock.paused() ? "HOLD" : "SIM RUN";

@@ -42,4 +42,13 @@ void LineMesh::draw() const {
     glBindVertexArray(0);
 }
 
+void LineMesh::drawRange(GLint first, GLsizei count) const {
+    if (!vao_ || count <= 0) {
+        return;
+    }
+    glBindVertexArray(vao_);
+    glDrawArrays(GL_LINES, first, count);
+    glBindVertexArray(0);
+}
+
 } // namespace render

@@ -1,6 +1,7 @@
 #include "app/Window.h"
 
 #include "app/Log.h"
+#include "app/Paths.h"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -71,7 +72,8 @@ bool Window::create(const char* title, std::string& error) {
     glfwSetScrollCallback(window_, scrollCallback);
 
     glfwMakeContextCurrent(window_);
-    glfwSwapInterval(1);
+    // SOLSIM_VSYNC=0 turns vsync off, to measure what a frame really costs (dev hook).
+    glfwSwapInterval(envVar("SOLSIM_VSYNC") == "0" ? 0 : 1);
 
     const int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0 || GLAD_VERSION_MAJOR(version) < 3 ||

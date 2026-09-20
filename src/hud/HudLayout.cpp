@@ -1,5 +1,6 @@
 #include "hud/HudLayout.h"
 
+#include "hud/EarthUi.h"
 #include "hud/Panels.h"
 #include "hud/Theme.h"
 
@@ -32,6 +33,12 @@ void HudLayout::buildDefault(unsigned id) {
     ImGui::DockBuilderDockWindow(kWinTarget, rightTop);
     ImGui::DockBuilderDockWindow(kWinTelemetry, right);
     ImGui::DockBuilderDockWindow(kWinHistory, rightBottom);
+
+    // Earth view panels share the nodes of the panels they replace (EVENT LOG,
+    // STATE VECTOR and HISTORY are not drawn while it is up), so the layout keeps its shape.
+    ImGui::DockBuilderDockWindow(kWinFilter, leftBottom);
+    ImGui::DockBuilderDockWindow(kWinEarth, right);
+    ImGui::DockBuilderDockWindow(kWinResults, rightBottom);
     ImGui::DockBuilderFinish(id);
 }
 

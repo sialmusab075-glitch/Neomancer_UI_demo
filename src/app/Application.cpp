@@ -94,13 +94,18 @@ int Application::run() {
             window_.waitEvents(0.1); // minimised: don't spin
             continue;
         }
+        const double cpuStart = glfwGetTime();
         frame(dt);
+        const double cpuMs = (glfwGetTime() - cpuStart) * 1000.0;
+        cpuFrameMs_ = frameIndex_ == 0 ? cpuMs : cpuFrameMs_ * 0.95 + cpuMs * 0.05; // smoothed, swap wait excluded
 
         ++frameIndex_;
-        if (!screenshotPath_.empty() && frameIndex_ == screenshotFrame_) {
+        if (!screenshotPath_.empty() && frameIndex_ >= screenshotFrame_ &&
+            (!startInEarth_ || (outcomeFrame_ >= 0 && frameIndex_ >= outcomeFrame_ + screenshotFrame_) ||
+             neo_.state() == neo::NeoService::State::Failed)) {
             const bool ok = saveBackBufferBmp(screenshotPath_, fbw, fbh);
             logInfo("screenshot %s: %s", ok ? "written" : "FAILED", screenshotPath_.c_str());
-            logInfo("frame rate at capture: %.1f fps", static_cast<double>(ImGui::GetIO().Framerate));
+            logInfo("frame rate at capture: %.1f fps, CPU per frame %.2f ms", static_cast<double>(ImGui::GetIO().Framerate), cpuFrameMs_);
             glfwSetWindowShouldClose(window_.handle(), GLFW_TRUE);
         }
         window_.swapBuffers();
@@ -124,6 +129,7 @@ bool Application::init(std::string& error) {
     resetView();
 
     initImGui();
+    initNeo();
     applyDevHooks();
 
     sessionId_ = hud::hexId(static_cast<double>(std::time(nullptr)));
@@ -136,6 +142,10 @@ bool Application::init(std::string& error) {
     if (hud_.selected >= 0) {
         const sim::BodyData& d = system_.body(hud_.selected).data();
         logLine(std::string("TARGET ") + d.name + " " + d.idTag, hud::LogKind::System);
+    }
+    if (startInEarth_) {
+        hud_.selected = system_.indexOfTableRow(sim::kEarth);
+        beginEnterEarth(true);
     }
     return true;
 }
@@ -231,6 +241,13 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_TIME_SCALE=days/s    initial time scale
 //   SOLSIM_CAMERA=dist,yawDeg,pitchDeg
 //   SOLSIM_THEME=OBSERVATORY       start with the original teal HUD
+//   SOLSIM_EARTH=1              start in the Earth view (screenshots wait for the first query result)
+//   SOLSIM_NEO_TOPK=n, SOLSIM_NEO_MAXLD=ld   NEO FILTER top-K and max distance for that first query
+//   SOLSIM_NEO_PHA=1, SOLSIM_NEO_FROM/TO=YYYY-MM-DD   more of that first query's filter
+//   SOLSIM_NEO_SELECT=i, SOLSIM_NEO_HOVER=i|any   select / show as hovered result i (0-based; any = a visible one)
+//   SOLSIM_EARTH_ENTER=n, SOLSIM_EARTH_LEAVE=n   enter / leave the Earth view at frame n (with SOLSIM_SELECT=EARTH)
+//   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
+//   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
     screenshotPath_ = envVar("SOLSIM_SCREENSHOT");
     const std::string frames = envVar("SOLSIM_SCREENSHOT_FRAMES");
@@ -255,6 +272,29 @@ void Application::applyDevHooks() {
     if (!ts.empty()) {
         clock_.setScale(std::atof(ts.c_str()));
     }
+    if (envVar("SOLSIM_EARTH") == "1") {
+        startInEarth_ = true;
+    }
+    const std::string topk = envVar("SOLSIM_NEO_TOPK");
+    if (!topk.empty()) {
+        earthUi_.filter.topK = std::clamp(std::atoi(topk.c_str()), 1, neo::kMaxTopK);
+    }
+    const std::string maxld = envVar("SOLSIM_NEO_MAXLD");
+    if (!maxld.empty()) {
+        earthUi_.filter.maxDistance = static_cast<float>(std::atof(maxld.c_str()));
+    }
+    if (envVar("SOLSIM_NEO_PHA") == "1") {
+        earthUi_.filter.phaOnly = true;
+    }
+    const std::string from = envVar("SOLSIM_NEO_FROM"), to = envVar("SOLSIM_NEO_TO");
+    std::snprintf(earthUi_.filter.dateFrom, sizeof earthUi_.filter.dateFrom, "%s", from.c_str());
+    std::snprintf(earthUi_.filter.dateTo, sizeof earthUi_.filter.dateTo, "%s", to.c_str());
+    const std::string enterAt = envVar("SOLSIM_EARTH_ENTER"), leaveAt = envVar("SOLSIM_EARTH_LEAVE");
+    devEnterFrame_ = enterAt.empty() ? -1 : std::atol(enterAt.c_str());
+    devLeaveFrame_ = leaveAt.empty() ? -1 : std::atol(leaveAt.c_str());
+    const std::string devSel = envVar("SOLSIM_NEO_SELECT"), devHov = envVar("SOLSIM_NEO_HOVER");
+    devSelect_ = devSel.empty() ? -1 : std::atoi(devSel.c_str());
+    devHover_ = devHov.empty() ? -1 : (devHov == "any" ? -2 : std::atoi(devHov.c_str()));
     const std::string cam = envVar("SOLSIM_CAMERA");
     if (!cam.empty()) {
         float dist = camera_.distance(), yawDeg = 0.0f, pitchDeg = 0.0f;
@@ -349,6 +389,9 @@ void Application::frame(double realDt) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    updateNeo();
+    hud_.earthView = viewMode_ != ViewMode::Solar;
+
     // Status strips reserve their height, then the dockspace defines the 3D view.
     hud::drawTopStrip(clock_, hud_, sessionId_);
     hud::drawBottomStrip(hud_, log_, hud_.selected >= 0 ? system_.body(hud_.selected).data().name : "NONE");
@@ -357,13 +400,26 @@ void Application::frame(double realDt) {
 
     // Input (after NewFrame so ImGui's capture flags are current).
     handleInput(vp);
+    if (frameIndex_ == devEnterFrame_) {
+        requestEarthToggle();
+    }
+    if (frameIndex_ == devLeaveFrame_ && viewMode_ == ViewMode::Earth) {
+        beginLeaveEarth();
+    }
+    advanceViewMode(realDt);
 
     // --- simulation step -------------------------------------------------------------
     clock_.update(realDt);
     system_.update(clock_.timeDays());
 
+    const bool earthShown = earthSceneShown();
+    if (viewTransitioning() && !earthShown) {
+        updateTransitionCamera();
+    }
     eventBuffer_.clear();
-    detector_.update(system_, eventBuffer_);
+    if (!earthShown) {
+        detector_.update(system_, eventBuffer_); // solar events make no sense while the clock plays flybys
+    }
     for (const sim::SimEvent& e : eventBuffer_) {
         const bool alignment = e.type == sim::EventType::Opposition || e.type == sim::EventType::Conjunction;
         char buf[128];
@@ -374,7 +430,7 @@ void Application::frame(double realDt) {
         logLineAt(e.t_days, buf, alignment ? hud::LogKind::Alignment : hud::LogKind::Orbital, alarm);
     }
 
-    if (hud_.selected >= 0) {
+    if (!earthShown && hud_.selected >= 0) {
         const sim::Body& sel = system_.body(hud_.selected);
         probe_.observe(clock_.timeDays(), sel.orbit.pos_AU);
         if (probe_.hasPeriod() && probe_.crossings() != probeCrossings_) {
@@ -388,9 +444,18 @@ void Application::frame(double realDt) {
         }
     }
 
-    updateFollow(realDt);
-    visuals_ = scene_.layout(system_, mapper_, camera_, vp);
-    handlePick(vp);
+    const render::OrbitCamera& solarCam = viewMode_ == ViewMode::Solar ? camera_ : transCam_;
+    if (viewMode_ == ViewMode::Solar) {
+        updateFollow(realDt);
+    }
+    if (!earthShown) {
+        visuals_ = scene_.layout(system_, mapper_, solarCam, vp);
+    }
+    if (viewMode_ == ViewMode::Solar) {
+        handlePick(vp);
+    } else if (earthShown) {
+        earthPicking(vp);
+    }
 
     // --- HUD ---------------------------------------------------------------------------
     hud::HudEvents ev;
@@ -400,63 +465,28 @@ void Application::frame(double realDt) {
 
     // Viewport frame and scene labels, drawn under the panels.
     char tl[96], tr[96], bl[96], br[96];
-    std::snprintf(tl, sizeof tl, "VIEW \xC2\xB7 ECLIPTIC J2000 \xC2\xB7 CAM %.1f U", static_cast<double>(camera_.distance()));
+    std::snprintf(tl, sizeof tl, "VIEW \xC2\xB7 ECLIPTIC J2000 \xC2\xB7 CAM %.1f U", static_cast<double>(solarCam.distance()));
     std::snprintf(tr, sizeof tr, "%s", hud_.trueScale ? "SCALE 1:1 \xC2\xB7 1 AU = 10 U" : "SCALE LOG10 \xC2\xB7 k=10 c=10");
     std::snprintf(bl, sizeof bl, "TGT %s%s", hud_.selected >= 0 ? system_.body(hud_.selected).data().name : "NONE",
                   hud_.following ? " \xC2\xB7 TRACKING" : "");
     char date[32];
     hud::formatDate(date, sizeof date, clock_.timeDays());
     std::snprintf(br, sizeof br, "%+.2f D/S \xC2\xB7 %s", clock_.scale(), date);
+    if (earthShown) {
+        std::snprintf(tl, sizeof tl, "VIEW \xC2\xB7 EARTH FIXED \xC2\xB7 TILT 23.44\xC2\xB0 \xC2\xB7 CAM %.1f U",
+                      static_cast<double>(earthCam_.distance()));
+        std::snprintf(tr, sizeof tr, "SCALE LOG10 \xC2\xB7 r = 1 + %.1f\xC2\xB7log10(d/R)",
+                      neo::EarthViewScale().logSlope);
+        std::snprintf(bl, sizeof bl, "SCHEMATIC DIRECTION \xC2\xB7 REAL DATE, DISTANCE, V_REL");
+    }
     layout_.drawViewportFrame(viewRect, tl, tr, bl, br);
 
-    std::vector<hud::OverlayBody>& overlay = overlay_;
-    overlay.clear(); // capacity is kept between frames
-    const float fbToWindow = 1.0f / vp.fbPerWindow();
-    for (int i = 0; i < system_.bodyCount(); ++i) {
-        const render::BodyVisual& v = visuals_[static_cast<std::size_t>(i)];
-        hud::OverlayBody o;
-        o.name = system_.body(i).data().name;
-        o.pos = ImVec2(v.screen.px.x, v.screen.px.y);
-        o.radiusPx = v.radiusPx * fbToWindow;
-        o.onScreen = v.screen.onScreen;
-        overlay.push_back(o);
+    if (earthShown) {
+        frameEarthOverlay(vp, viewRect);
+    } else {
+        frameSolarOverlay(vp, solarCam);
     }
-    // Range-ring captions, projected from their world positions (no allocation per frame).
-    const std::vector<render::RingLabel>& rings = scene_.ringLabels();
-    ringMarkers_.resize(rings.size());
-    for (std::size_t i = 0; i < rings.size(); ++i) {
-        const glm::dvec3 world(rings[i].pos.x, rings[i].pos.y + scene_.structureY(), rings[i].pos.z);
-        const render::ScreenPoint sp = scene_.projectWorld(camera_, vp, world);
-        ringMarkers_[i].pos = ImVec2(sp.px.x, sp.px.y);
-        ringMarkers_[i].visible = sp.onScreen && hud_.showGrid;
-        ringMarkers_[i].text = rings[i].text;
-    }
-
-    hud::SceneOverlayInput overlayIn;
-    overlayIn.bodies = &overlay;
-    overlayIn.selected = hud_.selected;
-    overlayIn.following = hud_.following;
-    overlayIn.showLabels = hud_.showLabels;
-    overlayIn.dpiScale = dpiScale_;
-    overlayIn.additiveBlend = additiveBlendCallback;
-    overlayIn.ringLabels = ringMarkers_.data();
-    overlayIn.ringLabelCount = static_cast<int>(ringMarkers_.size());
-    if (hud_.selected >= 0 && system_.body(hud_.selected).parentIndex >= 0) {
-        // Target: PERI/APO markers on its orbit and a data tag (r, v).
-        const sim::Body& b = system_.body(hud_.selected);
-        const sim::OrbitalElements& el = b.data().elements;
-        const render::ScreenPoint peri =
-            scene_.projectWorld(camera_, vp, mapper_.toRender(sim::orbitPointAtEccentricAnomaly(el, 0.0)));
-        const render::ScreenPoint apo =
-            scene_.projectWorld(camera_, vp, mapper_.toRender(sim::orbitPointAtEccentricAnomaly(el, sim::kPi)));
-        overlayIn.peri = {ImVec2(peri.px.x, peri.px.y), peri.onScreen && hud_.showOrbits, "PERI"};
-        overlayIn.apo = {ImVec2(apo.px.x, apo.px.y), apo.onScreen && hud_.showOrbits, "APO"};
-        std::snprintf(dataTag_, sizeof dataTag_, "r %.4f AU \xC2\xB7 v %.1f km/s", b.orbit.r_AU,
-                      sim::length(b.orbit.vel_kms));
-        overlayIn.dataTag = dataTag_;
-        overlayIn.viewMaxX = vp.viewMin.x + vp.viewSize.x;
-    }
-    hud::drawSceneOverlay(overlayIn);
+    drawViewFade(viewRect);
 
     if (hud_.showImGuiDemo) {
         ImGui::ShowDemoWindow(&hud_.showImGuiDemo);
@@ -476,15 +506,74 @@ void Application::frame(double realDt) {
     if (clock_.scale() != 0.0) {
         timeDirection_ = clock_.scale() < 0.0 ? -1.0f : 1.0f;
     }
-    scene_.render(system_, mapper_, camera_, visuals_, vp, glfwGetTime(), timeDirection_, layers, hud_.selected,
-                  hud::theme().scene);
+    if (earthShown) {
+        renderEarthScene(vp, layers);
+    } else {
+        scene_.render(system_, mapper_, solarCam, visuals_, vp, glfwGetTime(), timeDirection_, layers, hud_.selected,
+                      hud::theme().scene);
+    }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void Application::frameSolarOverlay(const render::FrameViewport& vp, const render::OrbitCamera& cam) {
+    std::vector<hud::OverlayBody>& overlay = overlay_;
+    overlay.clear(); // capacity is kept between frames
+    const float fbToWindow = 1.0f / vp.fbPerWindow();
+    for (int i = 0; i < system_.bodyCount(); ++i) {
+        const render::BodyVisual& v = visuals_[static_cast<std::size_t>(i)];
+        hud::OverlayBody o;
+        o.name = system_.body(i).data().name;
+        o.pos = ImVec2(v.screen.px.x, v.screen.px.y);
+        o.radiusPx = v.radiusPx * fbToWindow;
+        o.onScreen = v.screen.onScreen;
+        overlay.push_back(o);
+    }
+    // Range-ring captions, projected from their world positions (no allocation per frame).
+    const std::vector<render::RingLabel>& rings = scene_.ringLabels();
+    ringMarkers_.resize(rings.size());
+    for (std::size_t i = 0; i < rings.size(); ++i) {
+        const glm::dvec3 world(rings[i].pos.x, rings[i].pos.y + scene_.structureY(), rings[i].pos.z);
+        const render::ScreenPoint sp = scene_.projectWorld(cam, vp, world);
+        ringMarkers_[i].pos = ImVec2(sp.px.x, sp.px.y);
+        ringMarkers_[i].visible = sp.onScreen && hud_.showGrid;
+        ringMarkers_[i].text = rings[i].text;
+    }
+
+    hud::SceneOverlayInput overlayIn;
+    overlayIn.bodies = &overlay;
+    overlayIn.selected = hud_.selected;
+    overlayIn.following = hud_.following;
+    overlayIn.showLabels = hud_.showLabels;
+    overlayIn.dpiScale = dpiScale_;
+    overlayIn.additiveBlend = additiveBlendCallback;
+    overlayIn.ringLabels = ringMarkers_.data();
+    overlayIn.ringLabelCount = static_cast<int>(ringMarkers_.size());
+    if (hud_.selected >= 0 && system_.body(hud_.selected).parentIndex >= 0) {
+        // Target: PERI/APO markers on its orbit and a data tag (r, v).
+        const sim::Body& b = system_.body(hud_.selected);
+        const sim::OrbitalElements& el = b.data().elements;
+        const render::ScreenPoint peri =
+            scene_.projectWorld(cam, vp, mapper_.toRender(sim::orbitPointAtEccentricAnomaly(el, 0.0)));
+        const render::ScreenPoint apo =
+            scene_.projectWorld(cam, vp, mapper_.toRender(sim::orbitPointAtEccentricAnomaly(el, sim::kPi)));
+        overlayIn.peri = {ImVec2(peri.px.x, peri.px.y), peri.onScreen && hud_.showOrbits, "PERI"};
+        overlayIn.apo = {ImVec2(apo.px.x, apo.px.y), apo.onScreen && hud_.showOrbits, "APO"};
+        std::snprintf(dataTag_, sizeof dataTag_, "r %.4f AU \xC2\xB7 v %.1f km/s", b.orbit.r_AU,
+                      sim::length(b.orbit.vel_kms));
+        overlayIn.dataTag = dataTag_;
+        overlayIn.viewMaxX = vp.viewMin.x + vp.viewSize.x;
+    }
+    hud::drawSceneOverlay(overlayIn);
 }
 
 void Application::drawHud(hud::HudEvents& ev) {
     hud_.fps = ImGui::GetIO().Framerate;
     hud::drawTitleBar(clock_, hud_);
     ev = hud::drawControls(clock_, system_, hud_);
+    if (earthSceneShown()) {
+        drawEarthPanels(ev);
+        return;
+    }
     hud::drawPlanetPanel(system_, hud_, clock_.elapsedDays());
     hud::drawDataGrid(system_, hud_);
 
@@ -502,6 +591,7 @@ void Application::drawHud(hud::HudEvents& ev) {
 
 void Application::applyHudEvents(const hud::HudEvents& ev, const render::FrameViewport& vp) {
     char buf[96];
+    applyEarthEvents(ev);
     if (ev.reversed) {
         probe_.reset();
         std::snprintf(buf, sizeof buf, "TIME REVERSED %+.2f D/S", clock_.scale());
@@ -582,17 +672,27 @@ void Application::handleInput(const render::FrameViewport& vp) {
     // Cursor deltas are in window coordinates; convert to framebuffer pixels.
     const float toFb = vp.fbPerWindow();
 
-    if (in.leftDragging()) {
-        camera_.rotate(in.cursorDx() * toFb / dpiScale_, in.cursorDy() * toFb / dpiScale_);
-    }
-    if (in.rightDragging()) {
-        hud_.following = false; // panning detaches the camera from its target
-        camera_.pan(in.cursorDx() * toFb, in.cursorDy() * toFb, vp.viewSizeFb().y);
-    }
-    if (in.scroll() != 0.0f) {
-        camera_.zoom(in.scroll());
-        followDistTo_ = camera_.distance(); // the user's zoom wins over an ongoing transition
-        followDistFrom_ = camera_.distance();
+    if (viewMode_ == ViewMode::Earth) {
+        // The Earth stays at the centre: orbit and zoom, no panning.
+        if (in.leftDragging()) {
+            earthCam_.rotate(in.cursorDx() * toFb / dpiScale_, in.cursorDy() * toFb / dpiScale_);
+        }
+        if (in.scroll() != 0.0f) {
+            earthCam_.zoom(in.scroll());
+        }
+    } else if (viewMode_ == ViewMode::Solar) {
+        if (in.leftDragging()) {
+            camera_.rotate(in.cursorDx() * toFb / dpiScale_, in.cursorDy() * toFb / dpiScale_);
+        }
+        if (in.rightDragging()) {
+            hud_.following = false; // panning detaches the camera from its target
+            camera_.pan(in.cursorDx() * toFb, in.cursorDy() * toFb, vp.viewSizeFb().y);
+        }
+        if (in.scroll() != 0.0f) {
+            camera_.zoom(in.scroll());
+            followDistTo_ = camera_.distance(); // the user's zoom wins over an ongoing transition
+            followDistFrom_ = camera_.distance();
+        }
     }
 
     if (!io.WantCaptureKeyboard) {
@@ -600,15 +700,22 @@ void Application::handleInput(const render::FrameViewport& vp) {
             clock_.togglePause();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            hud_.following = false;
+            if (viewMode_ == ViewMode::Earth) {
+                beginLeaveEarth();
+            } else {
+                hud_.following = false;
+            }
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
+            requestEarthToggle();
+        }
+        if (viewMode_ == ViewMode::Solar && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
             setFollowing(!hud_.following);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
             applyHudTheme((hud_.hudTheme + 1) % hud::kThemeCount);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) {
+        if (viewMode_ == ViewMode::Solar && ImGui::IsKeyPressed(ImGuiKey_Home, false)) {
             hud_.following = false;
             resetView();
         }

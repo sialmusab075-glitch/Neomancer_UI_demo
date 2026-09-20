@@ -72,6 +72,7 @@ std::string IngestReport::toJson() const {
     j["dataset"] = {{"objects", objects},
                     {"approaches", approaches},
                     {"objects_without_approaches", objectsWithoutApproaches},
+                    {"grazing_or_impact", grazingOrImpact},
                     {"unpropagatable_e_ge_1", unpropagatable},
                     {"measured_diameters", measuredDiameters},
                     {"estimated_diameters", estimatedDiameters},
@@ -120,11 +121,12 @@ std::string IngestReport::toText() const {
                   "objects                 %zu\n"
                   "approaches              %zu\n"
                   "objects with none       %zu\n"
+                  "closer than 1 R_Earth   %zu\n"
                   "e >= 1 (no propagation) %zu\n"
                   "measured diameters      %zu\n"
                   "H-estimated diameters   %zu\n"
                   "no diameter at all      %zu\n",
-                  objects, approaches, objectsWithoutApproaches, unpropagatable, measuredDiameters,
+                  objects, approaches, objectsWithoutApproaches, grazingOrImpact, unpropagatable, measuredDiameters,
                   estimatedDiameters, noDiameterAtAll);
     out += buf;
 

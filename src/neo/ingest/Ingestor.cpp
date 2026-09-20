@@ -386,6 +386,11 @@ bool Ingestor::run(Dataset& out, IngestReport& report) {
 
         report.objects = out.objectCount();
         report.approaches = out.approachCount();
+        for (const CloseApproach& approach : out.approaches()) {
+            if (approach.grazingOrImpact()) {
+                ++report.grazingOrImpact;
+            }
+        }
         for (std::uint32_t i = 0; i < out.records().size(); ++i) {
             const AsteroidRecord& record = out.records()[i];
             if (record.approachCount == 0) {

@@ -524,6 +524,29 @@ const but really costing probes — can still count.
 
 ---
 
+## 6b. A domain flag worth knowing: grazing or impact
+
+`CloseApproach::grazingOrImpact()` is true when the nominal geocentric distance
+is below **4.2635e-5 au = 6378.1 km, Earth's equatorial radius**. CAD measures
+distance from the Earth's *centre*, so a value under one radius means the body
+passed inside the planet. It is derived from `distanceAU` rather than stored,
+so the threshold has one definition and the database cannot disagree with the
+code. The ingest report counts these rows ("closer than 1 R_Earth").
+
+**On the real dataset the count is 0**, and that is the correct answer, not a
+missing feature. The closest pass in the data is 2025 UC11 at 0.0000441 au, which
+is 1.034 Earth radii (~6,600 km from the centre, roughly 220 km above the
+surface): a genuine, extraordinarily close pass, just outside the threshold. The
+next closest are 2020 VT4 (1.058 R_E) and 2025 TF (1.063 R_E). It is not a data
+error and the flag is not a data-error filter.
+
+A viva-worthy subtlety: **65 rows have a 3-sigma *minimum* distance below one
+Earth radius** even though their nominal distance is far larger (e.g. 2015 KE in
+1955: nominal 0.0016 au, 3-sigma range 0.00003–0.055 au). Those are poorly
+determined orbits far from their epoch, whose uncertainty ellipse merely reaches
+the Earth; 37 of the 65 are in the past. Flagging on `dist_min` would raise 65
+false alarms, which is why the flag uses the nominal distance.
+
 ## 7. What each structure replaces, and what stage 7 will compare
 
 | Mine | `std::` equivalent | The experiment |

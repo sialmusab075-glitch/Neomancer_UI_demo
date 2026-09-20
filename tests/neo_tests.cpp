@@ -375,6 +375,35 @@ void testJulianDates() {
     check(neo::julianDateFromIsoDate("2020-02-29", jd), "leap day accepted");
 }
 
+// --- grazing / impact ------------------------------------------------------
+
+void testGrazing() {
+    std::printf("[graze] approaches inside one Earth radius are flagged\n");
+    check(near(neo::kEarthRadiusAU, 6378.137 / 149597870.7, 1e-9), "the threshold is the 6378.1 km equatorial radius in AU",
+          fmt("%.6e", neo::kEarthRadiusAU));
+
+    neo::CloseApproach a;
+    a.distanceAU = 4.0e-5;
+    check(a.grazingOrImpact(), "4.0e-5 au (~5,984 km from the centre) is inside the Earth");
+    a.distanceAU = 4.2635e-5 - 1e-12;
+    check(a.grazingOrImpact(), "just under one Earth radius is flagged");
+    a.distanceAU = 4.2635e-5;
+    check(!a.grazingOrImpact(), "exactly one Earth radius is not (the bound is strict)");
+    // The real 2025 UC11 pass: 0.0000441 au = 1.034 Earth radii, ~220 km above
+    // the surface. A genuine very close pass, but not below the threshold.
+    a.distanceAU = 0.0000441;
+    check(!a.grazingOrImpact(), "2025 UC11 (1.034 R_Earth) is a close pass, not a graze");
+    a.distanceAU = 0.05;
+    check(!a.grazingOrImpact(), "an ordinary 0.05 au pass is not flagged");
+
+    // The fixture data contains no such row, and the flag must not invent one.
+    std::size_t flagged = 0;
+    for (const neo::ParsedApproach& p : g_approaches) {
+        flagged += p.approach.grazingOrImpact() ? 1u : 0u;
+    }
+    check(flagged == 0, "no fixture approach is flagged", std::to_string(flagged));
+}
+
 } // namespace
 
 // The flat approach vector is the memory-dominant structure once real CAD data
@@ -394,6 +423,7 @@ int main(int argc, char** argv) {
     testCadParsing();
     testJoin();
     testJulianDates();
+    testGrazing();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

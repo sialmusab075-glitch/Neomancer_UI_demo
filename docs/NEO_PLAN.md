@@ -618,3 +618,14 @@ time put the **best** element on top, so candidates were compared against the
 wrong end. The comparison against `std::partial_sort` caught it on the first
 run. It is written up in `docs/DSA_NOTES.md` because it is exactly the kind of
 thing a viva question is made of.
+
+### Stage 5 addendum — the grazing / impact flag
+
+`CloseApproach::grazingOrImpact()` (nominal `dist` < 4.2635e-5 au, Earth's
+equatorial radius 6378.1 km) is derived, not stored, and is counted in the ingest
+report and in `ingest_report.json` (`dataset.grazing_or_impact`). On the real
+data it matches **0** approaches: the closest pass, 2025 UC11 at 0.0000441 au, is
+1.034 Earth radii, about 220 km above the surface. Separately, 65 rows have a
+3-sigma minimum below one radius; all are poorly determined orbits far from their
+epoch, which is why the flag uses the nominal distance. Details in
+`docs/DSA_NOTES.md` section 6b.

@@ -10,6 +10,17 @@ namespace neo {
 // keep it are counted in the join report and dropped, never silently ignored.
 constexpr std::uint32_t kNoObject = 0xFFFFFFFFu;
 
+// Earth's equatorial radius, 6378.1 km, in AU (6378.137 / 149597870.7). CAD
+// reports geocentric distance, i.e. from the Earth's CENTRE, so a nominal
+// distance below this means the body passed inside the planet: a graze or an
+// impact. The equatorial radius is the larger of Earth's radii, so the test is
+// the conservative one for "inside the Earth".
+//
+// It is NOT a data-error filter. The closest real pass in the dataset, 2025 UC11
+// at 0.0000441 au (~6,600 km, 1.034 radii, roughly 220 km above the surface), is
+// genuine and sits just outside this threshold.
+constexpr double kEarthRadiusAU = 4.2635e-5;
+
 // One encounter from the CAD API. An object has many of these, so the record
 // holds a range into one flat vector rather than its own container: see
 // Dataset. The struct is kept small and trivially copyable because there can be
@@ -39,6 +50,11 @@ struct CloseApproach {
     bool distRangeDerived = false;
 
     bool matched() const { return objectIndex != kNoObject; }
+
+    // Geocentric distance below one Earth radius: a graze or an impact.
+    // Derived rather than stored, so the threshold has exactly one definition
+    // and the database cannot disagree with the code.
+    bool grazingOrImpact() const { return distanceAU < kEarthRadiusAU; }
 };
 
 // What a CAD row carried before the join: the designation is resolved to an

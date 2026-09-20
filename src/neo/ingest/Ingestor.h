@@ -69,6 +69,7 @@ struct IngestReport {
     std::size_t objects = 0;
     std::size_t approaches = 0;
     std::size_t objectsWithoutApproaches = 0;
+    std::size_t grazingOrImpact = 0; // approaches closer than one Earth radius
     std::size_t unpropagatable = 0;     // e >= 1
     std::size_t measuredDiameters = 0;
     std::size_t estimatedDiameters = 0; // no measurement, but H is known

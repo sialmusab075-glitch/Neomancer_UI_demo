@@ -84,6 +84,13 @@ add_library(solsim_neo STATIC
     src/neo/model/Hash.cpp
     src/neo/storage/Database.h
     src/neo/storage/Database.cpp
+    src/neo/dsa/Instrumentation.h
+    src/neo/dsa/HashMap.h
+    src/neo/dsa/Sort.h
+    src/neo/dsa/BinaryHeap.h
+    src/neo/dsa/AvlTree.h
+    src/neo/dsa/BucketIndex.h
+    src/neo/dsa/BucketIndex.cpp
     src/neo/ingest/ParseReport.h
     src/neo/ingest/ParseReport.cpp
     src/neo/ingest/SbdbParser.h
@@ -314,4 +321,16 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_storage_tests)
     set_target_properties(neo_storage_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_storage_tests COMMAND neo_storage_tests)
+
+    # DSA structures: edge cases plus differential fuzzing against std::.
+    # Run from the project root so the optional real-dataset pass can find
+    # data/neo.db; it skips cleanly when there is none.
+    add_executable(neo_dsa_tests tests/neo_dsa_tests.cpp)
+    target_link_libraries(neo_dsa_tests PRIVATE solsim_neo)
+    if(MINGW)
+        target_link_options(neo_dsa_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_dsa_tests)
+    set_target_properties(neo_dsa_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_dsa_tests COMMAND neo_dsa_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

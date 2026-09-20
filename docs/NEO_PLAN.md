@@ -344,7 +344,7 @@ page size, and memory for the master vector and each index.
 | 2 | Model + JSON parsing from fixtures + tests | **done** (97 checks in `neo_tests`) |
 | 3 | `neo_ingest`: real download, paging, cache, validation report | **done** (85 checks in `neo_ingest_tests`; one real run recorded below) |
 | 4 | SQLite schema + save/load + tests | **done** (79 checks in `neo_storage_tests`) |
-| 5 | DSA structures + unit tests | not started |
+| 5 | DSA structures + unit tests | **done** (133 checks in `neo_dsa_tests`; study notes in `docs/DSA_NOTES.md`) |
 | 6 | Query engine + planner + oracle tests | not started |
 | 7 | `neo_bench` + CSV + results summary | not started |
 | 8 | UI hook | not started |
@@ -558,3 +558,63 @@ hits, 0 requests):
 That is ~0.6 us per row to go from the file to the in-memory model with ranges
 rebuilt, which is the baseline the stage 7 ingestion/memory experiments compare
 against.
+
+## 12. DSA layer (stage 5, implemented)
+
+Code in `src/neo/dsa/`; every header opens with its purpose, per-operation
+complexity and the design choices behind it. `docs/DSA_NOTES.md` is the long
+form, with worked examples for the viva.
+
+| File | Structure | Used for |
+|---|---|---|
+| `HashMap.h` | open addressing, Robin Hood, backward-shift delete | `pdes` / `spkid` -> record index |
+| `Sort.h` | stable merge sort over index arrays, `lowerBound` / `upperBound`, `SortedView` | ordered views by diameter, H, MOID, a, e, i; approaches by date, distance, velocity |
+| `BinaryHeap.h` | array heap, O(n) heapify, `topK` | top-K closest / fastest / largest |
+| `AvlTree.h` | AVL over (key, payload) in a vector node pool | ordered index and range queries |
+| `BucketIndex.h/.cpp` | counting-sorted CSR buckets | size classes and year buckets |
+| `Instrumentation.h` | `NullCounters` / `LiveCounters` policy | stage 7 operation counts |
+
+### Stage 5 — decisions recorded
+
+1. **Indices, never copies.** Every structure stores `std::uint32_t` positions
+   into the master vectors. Six sorted views cost ~1 MB of indices; six views of
+   copies would cost ~102 MB.
+2. **Counters are a template policy inherited privately.** `NullCounters` is an
+   empty base with inline empty methods, so an uninstrumented build is
+   byte-identical; the tests instantiate the same structures with
+   `LiveCounters`, so the counting path is covered without a second build. The
+   methods are `const` with `mutable` fields so a `find()` can count its probes.
+3. **Sorted views exclude unknown keys structurally**, and count the exclusions.
+   A "diameter > 100 m" query cannot match an object with no diameter, because
+   such an object is not in the diameter view. NaN is refused for the same
+   reason: it would make the ordering meaningless.
+4. **AVL over an interval tree**, justified in the header and the notes: a close
+   approach is an instant, not an interval.
+5. **Buckets keep an "unknown" class** rather than dropping unclassifiable
+   objects, and an index records which diameter policy built it.
+6. The `SortedView` keeps keys parallel to the indices, so a binary search reads
+   one contiguous `double` array instead of touching 42,666 scattered records.
+
+### Stage 5 — the structures over the real dataset
+
+Run as part of `neo_dsa_tests` (it skips cleanly when `data/neo.db` is absent):
+
+| Structure | Measurement |
+|---|---|
+| `HashMap` of 42,666 designations | capacity 65,536, load 0.65, **mean probe 0.90, worst 12** |
+| Measured-diameter `SortedView` | 1,264 in the view, **41,402 excluded as unknown** |
+| `AvlTree` of 42,819 approach dates | **height 18** (perfect would be 16) |
+| Range query, the 2030s | 1,324 approaches, matching a linear scan exactly |
+| `topK` 10 closest | matches `std::partial_sort`; closest is 2025 UC11 at 0.000044 au |
+| Size buckets (measured or estimate) | 2,707 / 17,489 / 10,455 / 10,872 / 954, 189 unknown |
+| Year buckets | 1950..2149, 200 buckets, every approach filed |
+
+### Stage 5 — bug found by the differential tests
+
+`topK` inverted its ranking predicate before handing it to the heap. Since a
+max-heap already puts the greatest element under the comparator on top — and
+under "ranks above" that is the element ranking *last* — inverting it a second
+time put the **best** element on top, so candidates were compared against the
+wrong end. The comparison against `std::partial_sort` caught it on the first
+run. It is written up in `docs/DSA_NOTES.md` because it is exactly the kind of
+thing a viva question is made of.

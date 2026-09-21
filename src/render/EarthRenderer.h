@@ -48,7 +48,7 @@ struct FlybyScreen {
 };
 
 void layoutFlybys(const neo::FlybyScene& scene, double jdNow, const OrbitCamera& camera, const FrameViewport& vp,
-                  std::vector<FlybyScreen>& out);
+                  std::vector<FlybyScreen>& out, neo::EarthDisplay display = neo::EarthDisplay::Paths);
 
 // Nearest visible, unoccluded marker under a window-pixel position, or -1.
 // Flybys that are not drawn (unchecked and not selected) are not picked either.
@@ -63,6 +63,7 @@ struct EarthFrame {
     const neo::FlybyScene* scene = nullptr;   // may be null: just the Earth
     const std::vector<FlybyScreen>* layout = nullptr;
     int                   selected = -1;
+    neo::EarthDisplay     display = neo::EarthDisplay::Paths; // SWARM: markers only, all flybys on one loop clock
     const neo::FlybyChecks* checks = nullptr; // which flybys are drawn (null = all); see neo::FlybyChecks
     int                   hovered = -1;
     glm::vec3             earthColour{0.2f, 0.4f, 0.8f}; // the body table's colour: grid fallback and atmosphere tint

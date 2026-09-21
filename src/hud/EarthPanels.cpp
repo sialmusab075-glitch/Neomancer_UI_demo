@@ -271,7 +271,24 @@ void drawEarthViewPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& e
         }
 
         ImGui::Dummy(ImVec2(0.0f, 3.0f * s));
-        TinyText("FLYBYS  (THE SIM CLOCK MOVES THEM)");
+        TinyText("DISPLAY");
+        ImGui::SameLine();
+        pushFontSize(t.sizeSmall);
+        if (Button("PATHS", 0.0f, ui.display == neo::EarthDisplay::Paths)) {
+            ui.display = neo::EarthDisplay::Paths;
+        }
+        ImGui::SameLine();
+        if (Button("SWARM", 0.0f, ui.display == neo::EarthDisplay::Swarm)) {
+            ui.display = neo::EarthDisplay::Swarm;
+        }
+        popFont();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("PATHS: each flyby on its real date (few are on screen at once).\n"
+                              "SWARM: every checked flyby at once, each looping along its own path on one\n"
+                              "clock: real closest distance, speed proportional to its v_rel, timing schematic.");
+        }
+        ImGui::Dummy(ImVec2(0.0f, 2.0f * s));
+        TinyText(ui.display == neo::EarthDisplay::Swarm ? "FLYBYS  (SWARM: ALL AT ONCE, LOOPING)" : "FLYBYS  (THE SIM CLOCK MOVES THEM)");
         const float bw = (width - 2.0f * spacing) / 3.0f;
         const bool haveScene = view.scene != nullptr && !view.scene->flybys.empty();
         ImGui::BeginDisabled(!haveScene);
@@ -318,10 +335,13 @@ void drawEarthViewPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& e
                       neo::radialFromKm(42164.0, scale), neo::radialFromKm(384400.0, scale),
                       neo::radialFromKm(5.0 * 384400.0, scale), neo::radialFromKm(0.05 * sim::kAU_km, scale));
         TinyText(buf, t.textValue);
-        std::snprintf(buf, sizeof buf, "REAL: DATE, DISTANCE, V_REL, SIZE   [%.2f U/DAY PER KM/S]",
+        std::snprintf(buf, sizeof buf, ui.display == neo::EarthDisplay::Swarm ? "REAL: DISTANCE, V_REL, SIZE   [%.2f U/DAY PER KM/S]"
+                                                                               : "REAL: DATE, DISTANCE, V_REL, SIZE   [%.2f U/DAY PER KM/S]",
                       scale.unitsPerDayPerKms);
         TinyText(buf, t.textLabel);
-        TinyText("SCHEMATIC: DIRECTION (DESIGNATION HASH), STRAIGHT PATH", t.alarm);
+        TinyText(ui.display == neo::EarthDisplay::Swarm ? "SCHEMATIC: DIRECTION, PATH, AND TIMING (LOOPED, NOT THE CAD DATE)"
+                                                        : "SCHEMATIC: DIRECTION (DESIGNATION HASH), STRAIGHT PATH",
+                 t.alarm);
         TinyText("HOLLOW = D ESTIMATED FROM H  \xC2\xB7  ACCENT = PHA", t.textLabel);
         popFont();
     }

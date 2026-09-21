@@ -942,6 +942,29 @@ the panels they replace; an `imgui.ini` from before the Earth view still docks t
 Each result is an object *with its matching approaches*, so 50 objects can be 116 flybys.
 The flyby capped at 1,000 (`kMaxFlybys`); the panel says how many were not drawn.
 
+### Display: PATHS or SWARM
+
+The EARTH VIEW panel has a **DISPLAY** switch.
+
+- **PATHS** (default, the original behaviour): each flyby is on its **real date**, on the sim clock. A
+  flyby is on screen only for the few days its path takes to cross the view, so with a result spread over
+  decades only a handful are ever visible at once (in the test, at most 1 of 60), and SELECT ALL shows
+  mostly the long path lines.
+- **SWARM**: **all flybys at once, animated**: no path lines, just the cluster of markers around the Earth
+  (the selected flyby keeps its highlighted path). Each flyby loops along its own path on one shared clock:
+  one lap is `2 * pathHalfLength / speed` days, so fast objects lap fast, and its starting phase comes from a
+  hash of its designation, which spreads the cluster out and is the same every run. The path is fixed at
+  the same closest distance and the along-track speed is still proportional to the real v_rel;
+  what is **schematic** is the timing (the CAD date is not used) on top of the direction and path, and
+  the HUD says so ("SWARM · ALL FLYBYS AT ONCE · TIMING SCHEMATIC", and the legend lines). Ends fade, so the
+  wrap-around does not pop. It follows the checkboxes below (unchecked flybys are not in the swarm) and
+  the sim clock (paused = frozen). 1,000 flybys run at 60 fps.
+- Pure rule: `neo::swarmAlongTrack` / `swarmPhase` / `displayAlongTrack`. Tests (`neo_earthview_tests`, 189
+  checks): always inside the path, an exact lap, on its own path and never nearer than its real closest
+  distance, real speed, distinct phases, and 60 of 60 visible at every moment against at most 1 of 60 in PATHS.
+- `SOLSIM_EARTH_SWARM=1` starts in SWARM. The jump buttons and row clicks still move the clock, but in
+  SWARM the clock date does not decide where a flyby is.
+
 ### Choosing what is drawn: a checkbox per result row
 
 Every row of NEO RESULTS is one flyby (an object with three matching approaches has three

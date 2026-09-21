@@ -121,6 +121,24 @@ FlybyScene buildFlybyScene(const Dataset& dataset, const QueryResult& result,
 // negative before closest approach, zero at it, positive after.
 double alongTrack(const Flyby& flyby, double jdNow);
 
+// How the flybys are shown.
+//   PATHS  every flyby on its REAL date: it reaches its closest point at the CAD time, and is
+//          on screen only while |alongTrack| <= half a path (a few days either side), so with
+//          results spread over decades only a few are ever visible at once.
+//   SWARM  all flybys AT ONCE, animated: each one loops along its own path on one shared clock,
+//          starting from a phase taken from its designation hash. The closest distance and
+//          the along-track SPEED (proportional to the real v_rel) are unchanged; only the
+//          timing is schematic (the CAD date is not used), so the cluster is always there.
+enum class EarthDisplay : std::uint8_t { Paths, Swarm };
+
+// SWARM along-track distance at shared time `jdNow`: one lap is 2 * pathHalfLength / speed days
+// (fast objects lap quickly, slow ones slowly), the phase is per flyby, and the result is always
+// inside [-pathHalfLength, +pathHalfLength).
+double swarmPhase(const Flyby& flyby);                      // [0, 1), from the designation hash
+double swarmAlongTrack(const Flyby& flyby, double jdNow, const EarthViewScale& scale);
+// The along-track distance for a display mode (alongTrack for PATHS, swarmAlongTrack for SWARM).
+double displayAlongTrack(EarthDisplay display, const Flyby& flyby, double jdNow, const EarthViewScale& scale);
+
 // Position in render units at `jdNow`: closest + direction * alongTrack.
 sim::Vec3d flybyPosition(const Flyby& flyby, double jdNow);
 

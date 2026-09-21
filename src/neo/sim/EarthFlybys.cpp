@@ -180,6 +180,29 @@ FlybyScene buildFlybyScene(const Dataset& dataset, const QueryResult& result, co
 
 double alongTrack(const Flyby& flyby, double jdNow) { return flyby.speed * (jdNow - flyby.tcaJd); }
 
+double swarmPhase(const Flyby& flyby) {
+    // The top 24 bits of a hash scrambled once more (FNV output is not well spread in its low bits).
+    std::uint32_t h = flyby.hash * 2654435761u;
+    h ^= h >> 15;
+    return static_cast<double>(h >> 8) / 16777216.0;
+}
+
+double swarmAlongTrack(const Flyby& flyby, double jdNow, const EarthViewScale& scale) {
+    const double lap = 2.0 * scale.pathHalfLength;
+    if (!(flyby.speed > 0.0)) {
+        return 0.0;
+    }
+    double u = std::fmod(flyby.speed * jdNow / lap + swarmPhase(flyby), 1.0); // laps completed, fractional part
+    if (u < 0.0) {
+        u += 1.0;
+    }
+    return (u - 0.5) * lap;
+}
+
+double displayAlongTrack(EarthDisplay display, const Flyby& flyby, double jdNow, const EarthViewScale& scale) {
+    return display == EarthDisplay::Swarm ? swarmAlongTrack(flyby, jdNow, scale) : alongTrack(flyby, jdNow);
+}
+
 sim::Vec3d flybyPosition(const Flyby& flyby, double jdNow) {
     return flyby.closest + flyby.direction * alongTrack(flyby, jdNow);
 }

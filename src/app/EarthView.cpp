@@ -430,7 +430,7 @@ void Application::applyEarthEvents(const hud::HudEvents& ev) {
 
 void Application::earthPicking(const render::FrameViewport& vp) {
     if (haveOutcome_ && outcome_.ok) {
-        render::layoutFlybys(outcome_.scene, earthJd(), earthCam_, vp, flybyLayout_);
+        render::layoutFlybys(outcome_.scene, earthJd(), earthCam_, vp, flybyLayout_, earthUi_.display);
     } else {
         flybyLayout_.clear();
     }
@@ -593,6 +593,7 @@ void Application::renderEarthScene(const render::FrameViewport& vp, const render
     f.scene = haveOutcome_ && outcome_.ok ? &outcome_.scene : nullptr;
     f.layout = &flybyLayout_;
     f.selected = earthUi_.selected;
+    f.display = earthUi_.display;
     // A row hovered in NEO RESULTS previews its path only if that flyby is drawn.
     f.hovered = earthUi_.hovered >= 0 && earthUi_.checks.drawn(static_cast<std::size_t>(earthUi_.hovered), earthUi_.selected)
                     ? earthUi_.hovered : -1;

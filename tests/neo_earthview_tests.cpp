@@ -889,6 +889,80 @@ void testDefaultResult() {
     checkDefaultResult(real, "real");
 }
 
+// --- SWARM display: every flyby at once, animated --------------------------------------------------
+
+void testSwarmDisplay() {
+    std::printf("[swarm] all flybys at once, looping on one clock\n");
+    const neo::EarthViewScale sc;
+    const double half = sc.pathHalfLength;
+
+    // 60 flybys whose REAL dates are spread over thirty years, with a spread of distances and speeds.
+    std::vector<neo::Flyby> flybys;
+    for (int i = 0; i < 60; ++i) {
+        const neo::Asteroid a = asteroid(("2040 W" + std::to_string(i)).c_str(), 0.05 + 0.01 * i, 21.0 + 0.1 * i, i % 6 == 0);
+        neo::CloseApproach c;
+        c.jdTdb = jd("2030-01-01") + 180.0 * i;
+        c.distanceAU = 0.0004 + 0.0002 * i;
+        c.relVelocityKms = 5.0 + 0.5 * i;
+        flybys.push_back(neo::makeFlyby(a, c, 0, sc));
+    }
+
+    // The along-track distance is always inside the path and the loop is exact.
+    bool inside = true, periodic = true, phasesOk = true, positionsOnPath = true, atLeastRadius = true;
+    std::set<long long> phases;
+    for (const neo::Flyby& f : flybys) {
+        const double lap = 2.0 * half / f.speed;
+        phases.insert(static_cast<long long>(neo::swarmPhase(f) * 1e6));
+        phasesOk = phasesOk && neo::swarmPhase(f) >= 0.0 && neo::swarmPhase(f) < 1.0 && neo::swarmPhase(f) == neo::swarmPhase(f);
+        for (double t = 2462000.0; t < 2462000.0 + 3.0 * lap; t += lap / 37.0) {
+            const double along = neo::swarmAlongTrack(f, t, sc);
+            inside = inside && along >= -half - 1e-9 && along < half + 1e-9;
+            periodic = periodic && near(neo::swarmAlongTrack(f, t + lap, sc), along, 1e-6) ;
+            const sim::Vec3d pos = f.closest + f.direction * along;
+            positionsOnPath = positionsOnPath && near(sim::dot(pos - f.closest, f.closest), 0.0, 1e-6); // still on its own line
+            atLeastRadius = atLeastRadius && sim::length(pos) >= f.radius - 1e-9;                   // never nearer than the closest point
+        }
+    }
+    check(inside, "SWARM: the along-track distance stays inside the path for every flyby, always");
+    check(periodic, "SWARM: one lap is 2 * half-length / speed, exactly (fast objects lap fast)");
+    check(positionsOnPath && atLeastRadius, "SWARM: every position is on the flyby's own path and never nearer than its real closest distance");
+    check(phasesOk && phases.size() > 50, "SWARM: phases are in [0, 1) and differ between flybys (so the cluster is spread out)", std::to_string(phases.size()) + " distinct of 60");
+
+    // The speed is the real one (proportional to v_rel): away from the wrap-around, distance moves at speed * dt.
+    bool speedOk = true;
+    for (const neo::Flyby& f : flybys) {
+        const double t = 2462100.0;
+        const double a0 = neo::swarmAlongTrack(f, t, sc), a1 = neo::swarmAlongTrack(f, t + 0.01, sc);
+        if (a1 > a0) { // not across the wrap
+            speedOk = speedOk && near((a1 - a0) / 0.01, f.speed, 1e-6);
+        }
+    }
+    check(speedOk, "SWARM: objects move at their real along-track speed (proportional to v_rel)");
+    check(flybys.back().speed > flybys.front().speed, "and a faster flyby is faster");
+
+    // Deterministic: the same flyby gives the same picture, whichever run.
+    check(neo::swarmAlongTrack(flybys[7], 2462222.5, sc) == neo::swarmAlongTrack(flybys[7], 2462222.5, sc) &&
+              neo::swarmPhase(flybys[7]) == neo::swarmPhase(flybys[7]),
+          "SWARM: deterministic");
+
+    // The point of the mode: PATHS shows only the few flybys whose real date is near; SWARM shows all of them.
+    int pathsVisible = 0, swarmVisible = 0, swarmMinVisible = 60;
+    for (double t = jd("2030-01-01"); t < jd("2030-01-01") + 60 * 180.0; t += 23.0) {
+        int pv = 0, sv = 0;
+        for (const neo::Flyby& f : flybys) {
+            pv += neo::flybyVisible(f, t, sc) ? 1 : 0;
+            sv += std::fabs(neo::displayAlongTrack(neo::EarthDisplay::Swarm, f, t, sc)) <= half ? 1 : 0;
+        }
+        pathsVisible = std::max(pathsVisible, pv);
+        swarmVisible = std::max(swarmVisible, sv);
+        swarmMinVisible = std::min(swarmMinVisible, sv);
+    }
+    std::printf("  at most %d of 60 flybys visible in PATHS (real dates), %d to %d in SWARM\n", pathsVisible, swarmMinVisible, swarmVisible);
+    check(pathsVisible < 10, "PATHS: with dates spread over 30 years only a few flybys are on screen at once", std::to_string(pathsVisible));
+    check(swarmMinVisible == 60 && swarmVisible == 60, "SWARM: all 60 are on screen at every moment: a cluster, not a lone flyby");
+    check(neo::displayAlongTrack(neo::EarthDisplay::Paths, flybys[3], flybys[3].tcaJd, sc) == 0.0, "PATHS is unchanged: at the CAD time the object is at its closest point");
+}
+
 // --- the real dataset -----------------------------------------------------------------------------
 
 void testReal() {
@@ -956,6 +1030,7 @@ int main() {
     testFilterState();
     testService();
     testChecks();
+    testSwarmDisplay();
     testDefaultResult();
     testReal();
 

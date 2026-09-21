@@ -53,7 +53,7 @@ glm::vec3 ringLabelPoint(const neo::ReferenceRing& ring, const neo::EarthViewSca
 }
 
 void layoutFlybys(const neo::FlybyScene& scene, double jdNow, const OrbitCamera& camera, const FrameViewport& vp,
-                  std::vector<FlybyScreen>& out) {
+                  std::vector<FlybyScreen>& out, neo::EarthDisplay display) {
     out.resize(scene.flybys.size());
     const glm::mat4 viewProj = camera.projection(vp.aspect()) * camera.view();
     const glm::vec3 eye = camera.eyeOffset();
@@ -63,14 +63,14 @@ void layoutFlybys(const neo::FlybyScene& scene, double jdNow, const OrbitCamera&
     for (std::size_t i = 0; i < scene.flybys.size(); ++i) {
         const neo::Flyby& f = scene.flybys[i];
         FlybyScreen& s = out[i];
-        const double along = neo::alongTrack(f, jdNow);
+        const double along = neo::displayAlongTrack(display, f, jdNow, scene.scale);
         s.visible = std::fabs(along) <= half;
         if (!s.visible) {
             s.occluded = false;
             s.alpha = 0.0f;
             continue;
         }
-        const sim::Vec3d world = neo::flybyPosition(f, jdNow);
+        const sim::Vec3d world = f.closest + f.direction * along;
         s.rel = glm::vec3(glm::dvec3(world.x, world.y, world.z) - target);
         s.sp = projectToScreen(viewProj, s.rel, vp.viewSize.x, vp.viewSize.y);
         s.sp.px += vp.viewMin;
@@ -413,7 +413,9 @@ void EarthRenderer::draw(const EarthFrame& frame, glm::vec2 targetPx, double tim
                             !frame.checks->allChecked();
         const std::size_t shown = subset ? frame.checks->drawnCount(frame.selected) : frame.scene->flybys.size();
         const float crowd = std::clamp(std::sqrt(40.0f / static_cast<float>(std::max<std::size_t>(shown, 1))), 0.3f, 1.0f);
-        if (!subset) {
+        if (frame.display == neo::EarthDisplay::Swarm) {
+            // SWARM: no path lines at all, just the cluster of markers (the selected flyby keeps its highlight below).
+        } else if (!subset) {
             pathThinShader_.set("uColor", rgba(st.orbitPlain, 0.34f * crowd));
             pathsOther_.draw();
             pathThinShader_.set("uColor", rgba(st.accent, 0.50f * crowd));

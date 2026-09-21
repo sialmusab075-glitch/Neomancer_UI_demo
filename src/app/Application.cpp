@@ -253,6 +253,7 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_NEOS_DIRECT=n   propagate directly up to n objects (default 2000; 0 = always on the worker)
 //   SOLSIM_NEO_CHECKS=none|first:N|every:N   which NEO RESULTS rows stay checked after the first query
 //   SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..."   inject left clicks at window pixels (to drive the panels in scripted runs)
+//   SOLSIM_EARTH_SWARM=1   start the Earth view in SWARM display (all flybys at once)
 //   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
 //   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
@@ -300,6 +301,9 @@ void Application::applyDevHooks() {
     devEnterFrame_ = enterAt.empty() ? -1 : std::atol(enterAt.c_str());
     devLeaveFrame_ = leaveAt.empty() ? -1 : std::atol(leaveAt.c_str());
     devChecks_ = envVar("SOLSIM_NEO_CHECKS");
+    if (envVar("SOLSIM_EARTH_SWARM") == "1") {
+        earthUi_.display = neo::EarthDisplay::Swarm;
+    }
     {
         // SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..." presses the left button at window pixel (x, y) on that frame.
         const std::string script = envVar("SOLSIM_CLICKS");
@@ -537,7 +541,8 @@ void Application::frame(double realDt) {
                       static_cast<double>(earthCam_.distance()));
         std::snprintf(tr, sizeof tr, "SCALE LOG10 \xC2\xB7 r = 1 + %.1f\xC2\xB7log10(d/R)",
                       neo::EarthViewScale().logSlope);
-        std::snprintf(bl, sizeof bl, "SCHEMATIC DIRECTION \xC2\xB7 REAL DATE, DISTANCE, V_REL");
+        std::snprintf(bl, sizeof bl, earthUi_.display == neo::EarthDisplay::Swarm ? "SWARM \xC2\xB7 ALL FLYBYS AT ONCE \xC2\xB7 TIMING SCHEMATIC"
+                                                                              : "SCHEMATIC DIRECTION \xC2\xB7 REAL DATE, DISTANCE, V_REL");
     }
     layout_.drawViewportFrame(viewRect, tl, tr, bl, br);
 

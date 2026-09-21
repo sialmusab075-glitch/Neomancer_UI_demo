@@ -274,12 +274,12 @@ void drawEarthViewPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& e
         TinyText("DISPLAY");
         ImGui::SameLine();
         pushFontSize(t.sizeSmall);
-        if (Button("PATHS", 0.0f, ui.display == neo::EarthDisplay::Paths)) {
-            ui.display = neo::EarthDisplay::Paths;
-        }
-        ImGui::SameLine();
         if (Button("SWARM", 0.0f, ui.display == neo::EarthDisplay::Swarm)) {
             ui.display = neo::EarthDisplay::Swarm;
+        }
+        ImGui::SameLine();
+        if (Button("PATHS", 0.0f, ui.display == neo::EarthDisplay::Paths)) {
+            ui.display = neo::EarthDisplay::Paths;
         }
         popFont();
         if (ImGui::IsItemHovered()) {
@@ -404,6 +404,24 @@ void drawNeoResultsPanel(EarthUiState& ui, const NeoPanelView& view, HudEvents& 
                               "Click a row: select it for TARGET and jump the clock; its checkbox is not touched.\n"
                               "Shift-click: a range from the last toggled row.  Ctrl-click a row: toggle its checkbox.\n"
                               "The selected flyby is always drawn; unchecking it clears the selection.");
+        }
+        // DISPLAY, here as well as in EARTH VIEW: that panel can be dragged down to a title bar, and this
+        // is the panel the results are read in.
+        TinyText("DISPLAY");
+        ImGui::SameLine();
+        if (Button("SWARM", 0.0f, ui.display == neo::EarthDisplay::Swarm)) {
+            ui.display = neo::EarthDisplay::Swarm;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Every checked flyby at once, looping along its own path: a cluster around the Earth.\n"
+                              "Timing is schematic (the CAD date is not used).");
+        }
+        ImGui::SameLine();
+        if (Button("PATHS", 0.0f, ui.display == neo::EarthDisplay::Paths)) {
+            ui.display = neo::EarthDisplay::Paths;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Each flyby on its real date, drawn with its path line. Few are on screen at once.");
         }
         popFont();
 

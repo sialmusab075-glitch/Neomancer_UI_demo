@@ -27,7 +27,7 @@ struct EarthUiState {
     bool  showRings = true;
     int   selected = -1;      // index into the flyby scene, -1 = none
     int   hovered = -1;
-    neo::EarthDisplay display = neo::EarthDisplay::Paths; // PATHS: real dates; SWARM: every flyby at once, animated
+    neo::EarthDisplay display = neo::EarthDisplay::Swarm; // SWARM (default): every flyby at once, animated; PATHS: real dates
     neo::FlybyChecks checks;  // which flybys of the result are drawn (NEO RESULTS checkboxes)
 };
 

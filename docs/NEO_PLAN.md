@@ -944,13 +944,15 @@ The flyby capped at 1,000 (`kMaxFlybys`); the panel says how many were not drawn
 
 ### Display: PATHS or SWARM
 
-The EARTH VIEW panel has a **DISPLAY** switch.
+**DISPLAY** has a switch in the EARTH VIEW panel **and** one under SELECT ALL / SELECT NONE in NEO RESULTS
+(the EARTH VIEW panel can be dragged down to a title bar in a saved layout, which hid the switch: it was found
+that way). **SWARM is the default**: it was first PATHS, and a real user twice expected the cluster.
 
-- **PATHS** (default, the original behaviour): each flyby is on its **real date**, on the sim clock. A
+- **PATHS**: each flyby is on its **real date**, on the sim clock. A
   flyby is on screen only for the few days its path takes to cross the view, so with a result spread over
   decades only a handful are ever visible at once (in the test, at most 1 of 60), and SELECT ALL shows
   mostly the long path lines.
-- **SWARM**: **all flybys at once, animated**: no path lines, just the cluster of markers around the Earth
+- **SWARM** (the default): **all flybys at once, animated**: no path lines, just the cluster of markers around the Earth
   (the selected flyby keeps its highlighted path). Each flyby loops along its own path on one shared clock:
   one lap is `2 * pathHalfLength / speed` days, so fast objects lap fast, and its starting phase comes from a
   hash of its designation, which spreads the cluster out and is the same every run. The path is fixed at
@@ -962,7 +964,7 @@ The EARTH VIEW panel has a **DISPLAY** switch.
 - Pure rule: `neo::swarmAlongTrack` / `swarmPhase` / `displayAlongTrack`. Tests (`neo_earthview_tests`, 189
   checks): always inside the path, an exact lap, on its own path and never nearer than its real closest
   distance, real speed, distinct phases, and 60 of 60 visible at every moment against at most 1 of 60 in PATHS.
-- `SOLSIM_EARTH_SWARM=1` starts in SWARM. The jump buttons and row clicks still move the clock, but in
+- `SOLSIM_EARTH_DISPLAY=swarm|paths` picks the start display. The jump buttons and row clicks still move the clock, but in
   SWARM the clock date does not decide where a flyby is.
 
 ### Choosing what is drawn: a checkbox per result row

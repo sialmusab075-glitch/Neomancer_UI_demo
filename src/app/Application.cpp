@@ -253,7 +253,7 @@ void Application::applyDpiScale(float scale) {
 //   SOLSIM_NEOS_DIRECT=n   propagate directly up to n objects (default 2000; 0 = always on the worker)
 //   SOLSIM_NEO_CHECKS=none|first:N|every:N   which NEO RESULTS rows stay checked after the first query
 //   SOLSIM_CLICKS="frame:x:y[:shift|ctrl];..."   inject left clicks at window pixels (to drive the panels in scripted runs)
-//   SOLSIM_EARTH_SWARM=1   start the Earth view in SWARM display (all flybys at once)
+//   SOLSIM_EARTH_DISPLAY=swarm|paths   the Earth view's display (default swarm: all flybys at once)
 //   SOLSIM_VSYNC=0              vsync off, for measuring frame cost
 //   SOLSIM_NEO_DB=path          the NEO database (default: data/neo.db found above the executable)
 void Application::applyDevHooks() {
@@ -301,7 +301,9 @@ void Application::applyDevHooks() {
     devEnterFrame_ = enterAt.empty() ? -1 : std::atol(enterAt.c_str());
     devLeaveFrame_ = leaveAt.empty() ? -1 : std::atol(leaveAt.c_str());
     devChecks_ = envVar("SOLSIM_NEO_CHECKS");
-    if (envVar("SOLSIM_EARTH_SWARM") == "1") {
+    if (envVar("SOLSIM_EARTH_DISPLAY") == "paths") {
+        earthUi_.display = neo::EarthDisplay::Paths;
+    } else if (envVar("SOLSIM_EARTH_DISPLAY") == "swarm") {
         earthUi_.display = neo::EarthDisplay::Swarm;
     }
     {

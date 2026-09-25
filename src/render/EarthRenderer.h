@@ -63,7 +63,7 @@ struct EarthFrame {
     const neo::FlybyScene* scene = nullptr;   // may be null: just the Earth
     const std::vector<FlybyScreen>* layout = nullptr;
     int                   selected = -1;
-    neo::EarthDisplay     display = neo::EarthDisplay::Paths; // SWARM: markers only, all flybys on one loop clock
+    neo::EarthDisplay     display = neo::EarthDisplay::Paths; // SWARM: every checked path, all markers on one loop clock
     const neo::FlybyChecks* checks = nullptr; // which flybys are drawn (null = all); see neo::FlybyChecks
     int                   hovered = -1;
     glm::vec3             earthColour{0.2f, 0.4f, 0.8f}; // the body table's colour: grid fallback and atmosphere tint

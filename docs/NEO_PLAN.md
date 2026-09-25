@@ -952,7 +952,7 @@ that way). **SWARM is the default**: it was first PATHS, and a real user twice e
   flyby is on screen only for the few days its path takes to cross the view, so with a result spread over
   decades only a handful are ever visible at once (in the test, at most 1 of 60), and SELECT ALL shows
   mostly the long path lines.
-- **SWARM** (the default): **all flybys at once, animated**: no path lines, just the cluster of markers around the Earth
+- **SWARM** (the default): **all flybys at once, animated**: every checked flyby's projected path is drawn, with its marker moving along it, so the whole cluster is around the Earth at once
   (the selected flyby keeps its highlighted path). Each flyby loops along its own path on one shared clock:
   one lap is `2 * pathHalfLength / speed` days, so fast objects lap fast, and its starting phase comes from a
   hash of its designation, which spreads the cluster out and is the same every run. The path is fixed at

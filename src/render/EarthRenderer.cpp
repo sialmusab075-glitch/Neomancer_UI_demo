@@ -413,9 +413,9 @@ void EarthRenderer::draw(const EarthFrame& frame, glm::vec2 targetPx, double tim
                             !frame.checks->allChecked();
         const std::size_t shown = subset ? frame.checks->drawnCount(frame.selected) : frame.scene->flybys.size();
         const float crowd = std::clamp(std::sqrt(40.0f / static_cast<float>(std::max<std::size_t>(shown, 1))), 0.3f, 1.0f);
-        if (frame.display == neo::EarthDisplay::Swarm) {
-            // SWARM: no path lines at all, just the cluster of markers (the selected flyby keeps its highlight below).
-        } else if (!subset) {
+        // Both displays draw every checked flyby's projected path; they differ only in where the
+        // markers are on those paths (real dates in PATHS, all at once in SWARM).
+        if (!subset) {
             pathThinShader_.set("uColor", rgba(st.orbitPlain, 0.34f * crowd));
             pathsOther_.draw();
             pathThinShader_.set("uColor", rgba(st.accent, 0.50f * crowd));

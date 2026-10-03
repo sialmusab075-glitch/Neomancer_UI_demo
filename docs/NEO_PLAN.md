@@ -1115,9 +1115,10 @@ camera target, fine everywhere except zoomed to sub-pixel scale on a far point i
 
 `neo/sim/SwarmLegend.h` defines one legend for the shader, the HUD legend bar and the tests:
 DISTANCE FROM EARTH (0.01 to 5 AU, log), PHA, DIAMETER (10 m to 10 km, log), TIME TO
-APPROACH (now to one year; refreshed about once per simulated day). *The Earth view has no
-SWARM mode yet, so there was nothing to share it with; the legend is written so it can adopt
-it.*
+APPROACH (now to one year; refreshed about once per simulated day). *The Earth view has a
+SWARM display now (section 14), but it is a different thing (animated flyby paths on schematic
+timing) and it does not use this legend: the Earth view still has no legend or colour modes.
+The legend is written so it can adopt them.*
 
 ### Selection, shared by both views
 
@@ -1180,4 +1181,5 @@ propagatable, one direct frame and one worker node timed, a real object equal to
 - Real mouse clicks on a NEOS point were not driven by hand (the picker is unit-tested and
   the selection path was exercised by a hook).
 - Double-click to track an asteroid with the camera.
-- The Earth view has no legend / SWARM mode.
+- The Earth view has no legend / colour modes. (Its SWARM display exists, see section 14, but
+  it does not use `SwarmLegend`.)

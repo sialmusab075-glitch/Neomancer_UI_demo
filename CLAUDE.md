@@ -12,7 +12,7 @@ The graded part is the data + DSA + query layer (src/neo); the UI is secondary.
 Target toolchains: MSVC (primary) and GCC via WinLibs + Ninja.
   cmake -B build-gcc -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
   cmake --build build-gcc
-  ctest --test-dir build-gcc        # 10 suites, must all pass before every commit
+  ctest --test-dir build-gcc        # 12 suites, must all pass before every commit
 Must be warning-free under GCC -Wall -Wextra -Wpedantic and MSVC-clean by construction.
 If SolSystemSim.exe is locked (the app is running), never kill it: link a
 separate exe name for testing instead.
@@ -37,6 +37,14 @@ separate exe name for testing instead.
 - Update docs/NEO_PLAN.md after each feature, including real vs schematic.
 - UI changes: verify by screenshot using the SOLSIM_* dev hooks listed in README.md
   (SOLSIM_SCREENSHOT, SOLSIM_EARTH=1, SOLSIM_CLICKS, ...).
+
+## Satellites (visualization only, not graded)
+Separate from the NEO/DSA work in repo structure and in docs: src/sat (solsim_sat), tools/sat_ingest and
+tools/sat_bench, tests/sat_*_tests.cpp, docs/SATELLITES.md. Do NOT describe satellites in docs/NEO_PLAN.md,
+and src/neo must never include anything from src/sat. solsim_sat_ingest may use src/neo's HTTP/cache classes
+(one way only). external/sgp4 is Vallado's reference code vendored unmodified and byte-exact (MIT, pinned
+commit in THIRD_PARTY.md): never edit it. SGP4 is checked against Vallado's vectors in sat_tests; keep that
+passing. Status: data and propagation built and tested; nothing drawn yet; CelesTrak never contacted.
 
 ## Current state (done)
 Ingest -> SQLite -> DSA -> query engine/planner -> Earth view (schematic flybys,

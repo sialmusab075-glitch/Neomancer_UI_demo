@@ -12,6 +12,7 @@
 #include "neo/dsa/BinaryHeap.h"
 #include "neo/dsa/BucketIndex.h"
 #include "neo/dsa/HashMap.h"
+#include "neo/dsa/IndexedHashMap.h"
 #include "neo/dsa/Sort.h"
 #include "neo/model/Dataset.h"
 #include "neo/storage/Database.h"
@@ -193,6 +194,137 @@ void testHashMapFuzz() {
     check(sameContents, "and holds exactly the same entries at the end");
     check(mine.counters().probes > 0, "the instrumented build counted probes",
           num(static_cast<std::size_t>(mine.counters().probes)));
+}
+
+// --- IndexedHashMap (stage 7 memory experiment) ------------------------------
+
+struct VectorKey {
+    const std::vector<std::string>* keys;
+    const std::string& operator()(std::uint32_t record) const { return (*keys)[record]; }
+};
+
+void testIndexedHashMapBasics() {
+    std::printf("[indexed hashmap] edge cases\n");
+    std::vector<std::string> keys;
+    for (std::uint32_t i = 0; i < 1000; ++i) {
+        keys.push_back(keyFor(i));
+    }
+    neo::dsa::IndexedHashMap<VectorKey> map{VectorKey{&keys}};
+    std::string error;
+
+    check(map.empty() && map.find("nothing") == map.kNotFound, "a new map is empty and finds nothing");
+    check(!map.erase("nothing"), "erase on an empty map returns false");
+    check(map.checkInvariants(error), "an empty map is structurally sound", error);
+
+    check(map.insert(7), "the first insert is new");
+    check(map.find(keys[7]) == 7 && map.contains(keys[7]), "the record is found by its key");
+    check(map.insert(7) == false && map.size() == 1, "re-inserting the same record does not grow the map");
+    check(map.erase(keys[7]) && map.empty() && map.find(keys[7]) == map.kNotFound, "erase removes it");
+
+    for (std::uint32_t i = 0; i < 1000; ++i) {
+        map.insert(i);
+    }
+    check(map.size() == 1000 && map.loadFactor() <= 0.75, "1000 entries, load factor under 0.75", num(map.size()));
+    bool allFound = true;
+    for (std::uint32_t i = 0; i < 1000; ++i) {
+        allFound = allFound && map.find(keys[i]) == i;
+    }
+    check(allFound, "every key survives the rehashes");
+    check(map.checkInvariants(error), "invariants hold after growth", error);
+    check(map.find("not a designation") == map.kNotFound, "an absent key is not found");
+
+    for (std::uint32_t i = 0; i < 1000; ++i) {
+        map.erase(keys[i]);
+    }
+    check(map.empty() && map.checkInvariants(error), "erase-until-empty leaves a sound table", error);
+
+    // Two records with the same key: the later insert replaces the earlier one.
+    std::vector<std::string> twin = {"433", "433", "2020 AB1"};
+    neo::dsa::IndexedHashMap<VectorKey> dup{VectorKey{&twin}};
+    dup.insert(0);
+    check(!dup.insert(1) && dup.size() == 1 && dup.find("433") == 1, "same key: the record is replaced, not duplicated");
+
+    // Every key hashes alike: all 64 share one tag and one ideal slot, so only the key compare tells them apart.
+    struct ConstantHash {
+        std::uint64_t operator()(const std::string&) const { return 42; }
+    };
+    std::vector<std::string> many;
+    for (std::uint32_t i = 0; i < 64; ++i) {
+        many.push_back(keyFor(i));
+    }
+    neo::dsa::IndexedHashMap<VectorKey, std::string, ConstantHash> collide{VectorKey{&many}};
+    for (std::uint32_t i = 0; i < 64; ++i) {
+        collide.insert(i);
+    }
+    bool collideOk = true;
+    for (std::uint32_t i = 0; i < 64; ++i) {
+        collideOk = collideOk && collide.find(many[i]) == i;
+    }
+    check(collideOk && collide.checkInvariants(error), "64 keys with one hash value are all findable", error);
+    check(collide.erase(many[30]) && collide.find(many[30]) == collide.kNotFound && collide.find(many[31]) == 31,
+          "erasing from the middle of a long run keeps the rest reachable");
+
+    // The point of the experiment: the slot is 8 bytes, against the string-keyed slot.
+    neo::dsa::HashMap<std::string, std::uint32_t> classic(keys.size());
+    neo::dsa::IndexedHashMap<VectorKey> lean{VectorKey{&keys}, keys.size()};
+    for (std::uint32_t i = 0; i < keys.size(); ++i) {
+        classic.insert(keys[i], i);
+        lean.insert(i);
+    }
+    check(lean.capacity() == classic.capacity(), "both tables size themselves identically");
+    check(lean.memoryBytes() == lean.capacity() * 8, "an indexed slot is exactly 8 bytes");
+    check(lean.memoryBytes() * 3 < classic.memoryBytes(), "and the table is under a third of the string-keyed one",
+          num(lean.memoryBytes()) + " vs " + num(classic.memoryBytes()));
+}
+
+void testIndexedHashMapFuzz() {
+    std::printf("[indexed hashmap] 200k random ops against std::unordered_map\n");
+    // 8000 records over 4000 keys, so records collide on key and get replaced.
+    std::vector<std::string> keys;
+    for (std::uint32_t r = 0; r < 8000; ++r) {
+        keys.push_back(keyFor(r % 4000));
+    }
+    neo::dsa::IndexedHashMap<VectorKey, std::string, neo::dsa::DefaultHash<std::string>, neo::dsa::LiveCounters> mine{
+        VectorKey{&keys}};
+    std::unordered_map<std::string, std::uint32_t> reference;
+    Rng rng(0x1DEA11u);
+    std::string error;
+    bool agreed = true;
+    bool sound = true;
+    constexpr std::size_t kOps = 200000;
+
+    for (std::size_t op = 0; op < kOps && agreed && sound; ++op) {
+        const std::uint32_t record = rng.below(8000);
+        const std::string& k = keys[record];
+        const std::uint32_t roll = rng.below(100);
+        if (roll < 45) {
+            const bool mineNew = mine.insert(record);
+            const bool refNew = reference.insert_or_assign(k, record).second;
+            agreed = agreed && mineNew == refNew;
+        } else if (roll < 70) {
+            const std::uint32_t got = mine.find(k);
+            const auto it = reference.find(k);
+            agreed = agreed && (it == reference.end() ? got == mine.kNotFound : got == it->second);
+        } else if (roll < 95) {
+            agreed = agreed && mine.erase(k) == (reference.erase(k) != 0);
+        } else {
+            mine.clear();
+            reference.clear();
+        }
+        agreed = agreed && mine.size() == reference.size();
+        if (op % 5000 == 0) {
+            sound = mine.checkInvariants(error);
+        }
+    }
+    check(agreed, "the indexed map agrees with std::unordered_map on every operation");
+    check(sound, "invariants held throughout the fuzz", error);
+
+    bool sameContents = mine.size() == reference.size();
+    for (const auto& entry : reference) {
+        sameContents = sameContents && mine.find(entry.first) == entry.second;
+    }
+    check(sameContents, "and holds exactly the same entries at the end");
+    check(mine.counters().probes > 0, "the instrumented build counted probes");
 }
 
 // --- sorting ---------------------------------------------------------------
@@ -755,6 +887,8 @@ void testRealDataset() {
 int main() {
     testHashMapBasics();
     testHashMapFuzz();
+    testIndexedHashMapBasics();
+    testIndexedHashMapFuzz();
     testSortBasics();
     testSortedView();
     testHeapBasics();

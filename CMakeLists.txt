@@ -193,6 +193,60 @@ solsim_set_warnings(neo_bench)
 set_target_properties(neo_bench PROPERTIES FOLDER "neo")
 
 # ---------------------------------------------------------------------------
+# Satellites: VISUALIZATION ONLY, separate from the NEO data and DSA layer.
+#   solsim_sat         element sets (TLE and OMM parsers), SGP4 propagation, the catalogue file.
+#                      Depends on the vendored sgp4 target and nlohmann/json; not on src/neo.
+#   solsim_sat_ingest  the CelesTrak downloader. The only part that touches src/neo, and only for its
+#                      HTTP interface, retry and response cache; nothing in src/neo knows about satellites.
+# See docs/SATELLITES.md.
+# ---------------------------------------------------------------------------
+add_library(solsim_sat STATIC
+    src/sat/model/ElementSet.h
+    src/sat/model/ElementSet.cpp
+    src/sat/model/Epoch.h
+    src/sat/model/Epoch.cpp
+    src/sat/parse/ParseReport.h
+    src/sat/parse/detail/Number.h
+    src/sat/parse/detail/Number.cpp
+    src/sat/parse/TleParser.h
+    src/sat/parse/TleParser.cpp
+    src/sat/parse/OmmJsonParser.h
+    src/sat/parse/OmmJsonParser.cpp
+    src/sat/sim/Propagator.h
+    src/sat/sim/Propagator.cpp
+    src/sat/store/Catalog.h
+    src/sat/store/Catalog.cpp)
+target_include_directories(solsim_sat PUBLIC src)
+target_link_libraries(solsim_sat PRIVATE nlohmann_json sgp4)
+solsim_set_warnings(solsim_sat)
+set_target_properties(solsim_sat PROPERTIES FOLDER "sat")
+
+add_library(solsim_sat_ingest STATIC
+    src/sat/ingest/CelesTrakIngestor.h
+    src/sat/ingest/CelesTrakIngestor.cpp)
+target_link_libraries(solsim_sat_ingest PUBLIC solsim_sat solsim_neo)
+solsim_set_warnings(solsim_sat_ingest)
+set_target_properties(solsim_sat_ingest PROPERTIES FOLDER "sat")
+
+# sat_ingest downloads from CelesTrak (the only satellite code that reaches the network; it links the
+# WinHTTP target) and writes data/sat/elements.json. sat_bench times propagation; no network.
+add_executable(sat_ingest tools/sat_ingest/main.cpp)
+target_link_libraries(sat_ingest PRIVATE solsim_sat_ingest solsim_neo_net)
+if(MINGW)
+    target_link_options(sat_ingest PRIVATE -static)
+endif()
+solsim_set_warnings(sat_ingest)
+set_target_properties(sat_ingest PROPERTIES FOLDER "sat")
+
+add_executable(sat_bench tools/sat_bench/main.cpp)
+target_link_libraries(sat_bench PRIVATE solsim_sat)
+if(MINGW)
+    target_link_options(sat_bench PRIVATE -static)
+endif()
+solsim_set_warnings(sat_bench)
+set_target_properties(sat_bench PROPERTIES FOLDER "sat")
+
+# ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -453,4 +507,30 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_bench_tests)
     set_target_properties(neo_bench_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_bench_tests COMMAND neo_bench_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Satellites (visualization only): parsers, SGP4 against Vallado's verification set, the catalogue file.
+    add_executable(sat_tests tests/sat_tests.cpp)
+    target_link_libraries(sat_tests PRIVATE solsim_sat)
+    target_compile_definitions(sat_tests PRIVATE
+        SAT_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sat"
+        SGP4_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sgp4")
+    if(MINGW)
+        target_link_options(sat_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(sat_tests)
+    set_target_properties(sat_tests PROPERTIES FOLDER "sat")
+    add_test(NAME sat_tests COMMAND sat_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # The CelesTrak ingest (URLs, cache, retry, the two-hour refresh rule, merging, pinned objects) with a
+    # fake HTTP client. No network.
+    add_executable(sat_ingest_tests tests/sat_ingest_tests.cpp)
+    target_link_libraries(sat_ingest_tests PRIVATE solsim_sat_ingest)
+    target_compile_definitions(sat_ingest_tests PRIVATE
+        SAT_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sat")
+    if(MINGW)
+        target_link_options(sat_ingest_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(sat_ingest_tests)
+    set_target_properties(sat_ingest_tests PROPERTIES FOLDER "sat")
+    add_test(NAME sat_ingest_tests COMMAND sat_ingest_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

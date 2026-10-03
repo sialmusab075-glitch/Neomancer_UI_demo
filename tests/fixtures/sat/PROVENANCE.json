@@ -1,0 +1,22 @@
+{
+  "fixture_set": "satellite element sets with traceable provenance",
+  "source_repository": "https://github.com/brandon-rhodes/python-sgp4",
+  "source_commit": "6e7428df7acc48e8176828289a8c14486a114759 (tag 2.27)",
+  "files": [
+    {
+      "file": "celestrak_3le_sample.txt",
+      "contents": "three element sets in CelesTrak's 3-line format (name padded to 24 characters, then the two TLE lines): ISS (ZARYA) epoch 2019-12-09 (the TLE printed in README.rst; the name comes from the export_omm call next to it), VANGUARD 1 epoch 2020 (VANGUARD_TLE in sgp4/tests.py) and MARIO epoch 2023 (MARIO_TLE in sgp4/tests.py; the test file says it was taken from CelesTrak's stations.txt)",
+      "sha256": "17dadfcd7b014f4bf1f04bf0d8642478af14b2d516e8d0529a55f3310308e0d5"
+    },
+    {
+      "file": "iss_omm_readme.json",
+      "contents": "the OMM field listing that README.rst prints for the same ISS element set (the output of python-sgp4's export_omm, not a CelesTrak download), with every value checked against the README text; includes extra fields (CENTER_NAME, REF_FRAME, ...) a parser must ignore",
+      "sha256": "eda0752c8c3c320faa33eeef43afb5f04db6562370163277532487dbc233f819"
+    }
+  ],
+  "notes": [
+    "No data was downloaded from CelesTrak for these fixtures: CelesTrak is not reachable from the build sandbox. The first live run of sat_ingest will be the first contact with the real service.",
+    "A TLE's checksum digit is part of each line; these lines were copied as published upstream."
+  ],
+  "fetched_utc": "2026-10-03"
+}

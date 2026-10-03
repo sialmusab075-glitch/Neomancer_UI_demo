@@ -1209,6 +1209,12 @@ neo_bench --db PATH --out-dir DIR --repeats N --seed N --sizes A,B --synthetic A
   The checksum is in the CSV `result` column, so the agreement is visible. (To prove the check bites, a
   deliberate off-by-epsilon in the AVL range walk was injected once: the range experiment reported it on
   every selectivity and the CSV check failed. The injected bug was then removed.)
+- **Every timed workload is a function of its own that the compiler may not inline** (`NEO_NOINLINE`).
+  The first version timed variants as lambdas inside one large function, and `dsa::topK` measured 1.2 ms
+  there against 0.48 ms as a function of its own: the inlined loop had lost its registers (section
+  "Why the heap looked slow" in `docs/DSA_NOTES.md`). With variants in one big function, which one wins can
+  be decided by register allocation, not by the data structure. Only `dsa::topK` moved materially when the
+  harness was rebuilt this way (about 2x faster); every other figure stayed within about 1.3x.
 - Linear-scan variants stop after a budget of 20 million element visits per repeat, so they run fewer
   operations at large n (the row says how many); figures are per operation either way.
 - Every CSV row carries its **dataset and dataset kind** (`real`, `synthetic-resampled`,
@@ -1235,6 +1241,7 @@ a test of the generator.
 |---|---|---|
 | exact lookup | linear scan, `dsa::HashMap<string,uint32>`, `std::unordered_map`, **`dsa::IndexedHashMap`** (record-index map) | `std::unordered_map` |
 | range (approach date, 0.1 / 1 / 10 % selectivity) | linear scan of the dense column, sorted view + binary search, AVL range walk | the linear scan (count and sum of indices per window) |
+| **mutation** (what the AVL tree is for) | AVL insert / erase; sorted array shifted per insert / erase; batch merge into a sorted array (B = 1 to 10,000); full rebuild | the three structures end with the identical sequence after the same inserts and erases |
 | top-K (approach distance, K = 10 / 100 / 1000) | `std::sort`, `dsa::mergeSort`, `std::partial_sort`, `dsa::topK` (heap), `std::priority_queue` | `std::sort` (ties broken by index, one right answer) |
 | combined query (8 queries) | naive scan, fixed driver order, statistics-driven planner | the naive scan |
 | index build and memory | every index, the master vectors | n/a |
@@ -1257,105 +1264,171 @@ Measured in the cloud sandbox: Linux x86-64, GCC 13.3, `-O3 -DNDEBUG`, a shared 
 7 repeats, all four datasets `synthetic-parametric` (no `neo.db` there). **These numbers show how the
 structures scale and compare; they are not the figures for the report.** Re-run `neo_bench` on the target
 machine with the real `neo.db` for those (the Intel UHD Windows machine the frame rates in sections 14 and
-15 come from). On shared hardware the spread is visible (min and max are in the CSV): differences under
-about 20 % between two variants are inside it.
+15 come from). The compiler-dependent findings below (top-K) are GCC 13 results and **must be re-measured
+under MSVC**. On shared hardware the spread is visible (min and max are in the CSV): four extra runs of
+the lookup experiment alone varied by at most 7 % per variant (one 25 % outlier at 100k), so differences
+well above that are real.
 
 **Exact lookup**, ns per lookup (75 % present designations):
 
 | n objects | linear scan | `dsa::HashMap` | `std::unordered_map` | `dsa::IndexedHashMap` |
 |---:|---:|---:|---:|---:|
-| 1,000 | 1,176 | 17.4 | 19.4 | 16.0 |
-| 10,000 | 15,340 | 26.5 | 32.0 | 27.0 |
-| 100,000 | 344,900 | 20.2 | 21.5 | 21.2 |
-| 500,000 | 5,293,000 | 20.8 | 26.9 | 24.2 |
+| 1,000 | 1,245 | 16.3 | 20.6 | 12.8 |
+| 10,000 | 14,550 | 22.5 | 20.8 | 17.6 |
+| 100,000 | 301,500 | 18.2 | 26.2 | 24.6 |
+| 500,000 | 3,857,000 | 18.3 | 34.5 | 23.4 |
+
+At 500k four further runs of the lookup experiment alone gave 16.1-17.1 (`HashMap`), 21.0-22.1
+(`IndexedHashMap`) and 28.2-30.2 ns (`unordered_map`).
 
 | n objects | table memory: `HashMap` | `IndexedHashMap` | `unordered_map` (estimate) | build ms: `HashMap` | `unordered_map` | `IndexedHashMap` |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100,000 | 10.0 MiB | **2.0 MiB** | 6.9 MiB | 17.2 | 22.2 | **8.7** |
-| 500,000 | 40.0 MiB | **8.0 MiB** | 34.5 MiB | 105 | 202 | **44.3** |
+| 100,000 | 10.0 MiB | **2.0 MiB** | 6.9 MiB | 11.0 | 16.8 | **5.2** |
+| 500,000 | 40.0 MiB | **8.0 MiB** | 34.5 MiB | 80.5 | 157 | **33.0** |
 
 **Range**, approach date, 1 % selectivity (4,998 approaches per window at 500k), ns per window:
 
-| n approaches | linear scan | sorted view + binary search | AVL range walk |
-|---:|---:|---:|---:|
-| 1,070 | 2,398 | 30.8 | 64.1 |
-| 9,981 | 35,200 | 56.8 | 537 |
-| 100,098 | 392,700 | 241.6 | 12,200 |
-| 499,768 | 1,852,000 | 883 | 96,340 |
+| n approaches | linear scan | sorted view + binary search | AVL range walk | AVL / sorted view |
+|---:|---:|---:|---:|---:|
+| 1,070 | 2,394 | 29.9 | 55.9 | 1.9x |
+| 9,981 | 35,670 | 50.7 | 364 | 7.2x |
+| 100,098 | 390,200 | 234.9 | 10,100 | 43x |
+| 499,768 | 1,780,000 | 864.7 | 77,820 | 90x |
 
-At 500k: 0.1 % selectivity is 141 ns (sorted view) against 6.6 us (AVL) against 1.64 ms (linear); 10 %
-is 9.4 us against 995 us against 2.03 ms. Build at 500k: sorted view 68.5 ms and 5.7 MiB, AVL 261 ms and
+At 500k: 0.1 % selectivity is 142 ns (sorted view) against 4.9 us (AVL) against 1.61 ms (linear); 10 % is
+8.4 us against 865 us against 2.10 ms. Build at 500k: sorted view 71.7 ms and 5.7 MiB, AVL 258 ms and
 11.4 MiB.
+
+**Mutation: the other half of the AVL trade**, ns per operation (the same four datasets; B inserts then the
+same B erases, so the structure returns to what it was; B = 1,000 up to 100k approaches, 200 at 500k):
+
+| n approaches | AVL insert | AVL erase | sorted array: insert (shift) | sorted array: erase (shift) | array / AVL, insert | array / AVL, erase |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,070 | 69 | 58 | 83 | 222 | 1.2x | 3.8x |
+| 9,981 | 161 | 152 | 1,017 | 18,890 | 6.3x | 124x |
+| 100,098 | 173 | 160 | 10,320 | 219,300 | 60x | 1,375x |
+| 499,768 | 410 | 414 | 97,500 | 999,400 | 238x | 2,415x |
+
+The AVL tree grows with log n (and cache misses); the shifted array grows linearly. **The erase column is
+inflated by the C library, not by the structure**: a plain `memmove` that moves 250,000 doubles down by one
+element (what an erase does) took about 650 us against 65 us for the same move up by one (an insert), in an
+isolated program on this machine. That is platform-dependent, so the fair figure for the array is its
+cheaper operation (the insert), and the main break-even below uses it.
+
+Keeping the array current by **merging a sorted batch** (sort the batch, one O(n + B) pass), ns per inserted
+element:
+
+| n approaches | B = 1 | B = 10 | B = 100 | B = 1,000 | B = 10,000 | full rebuild after 1,000 inserts (ms) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,070 | 1,221 | 144 | 27 | 43 | 65 | 0.105 |
+| 9,981 | 9,028 | 1,480 | 171 | 54 | 73 | 0.90 |
+| 100,098 | 134,600 | 13,500 | 1,503 | 195 | 90 | 11.2 |
+| 499,768 | 679,000 | 74,430 | 8,424 | 871 | 164 | 69.3 |
+
+Against an AVL insert (410 ns at 500k), merging is dearer per element at B = 1,000 (871 ns) and cheaper at
+B = 10,000 (164 ns): the crossover is a few thousand at 500k and about 1,000 at 100k.
+
+**Break-even**: with `x` range queries (1 % windows) per single mutation, the AVL tree costs
+`m_avl + x * q_avl`, the array `m_array + x * q_array`; the AVL tree is cheaper overall below
+`x = (m_array - m_avl) / (q_avl - q_array)`:
+
+| n approaches | vs array shifted per mutation (its cheaper op) | vs array shifted per mutation (average of insert and erase) | vs array merged in batches of 1,000 |
+|---:|---:|---:|---:|
+| 1,070 | 0.51 | 2.3 | array wins at any rate |
+| 9,981 | 2.8 | 32 | array wins at any rate |
+| 100,098 | 0.81 | 9.1 | 0.0036 (one query per 280 mutations) |
+| 499,768 | 1.27 | 7.2 | 0.0062 (one query per 160 mutations) |
 
 **Top-K** of 499,768 approaches by distance, ms:
 
 | k | `std::sort` (full) | `dsa::mergeSort` (full) | `std::partial_sort` | `dsa::topK` | `std::priority_queue` |
 |---:|---:|---:|---:|---:|---:|
-| 10 | 65.4 | 61.9 | 0.60 | 1.15 | 1.19 |
-| 100 | 65.1 | 62.1 | 1.17 | 1.38 | 0.87 |
-| 1000 | 62.7 | 63.0 | 1.47 | 2.22 | 1.57 |
+| 10 | 66.0 | 63.6 | 0.647 | **0.564** | 0.842 |
+| 100 | 64.6 | 62.2 | 0.662 | **0.606** | 0.906 |
+| 1000 | 64.9 | 60.5 | 1.351 | **1.291** | 1.567 |
+
+(`dsa::topK` was 1.15 / 1.38 / 2.22 ms in the first version of this harness, 1.2 to 1.9 times slower than
+`std::partial_sort`; that was a code-generation effect and a quadratic final sort, both fixed and explained
+in `docs/DSA_NOTES.md`. The full-sort figures in brackets are from the earlier run: the sort is not what
+changed.)
 
 **Combined queries**, ms, 500,000 objects / 499,768 approaches (the planner's chosen driver in the note
 column of the CSV):
 
 | Query | naive | fixed order | planned | matched |
 |---|---:|---:|---:|---:|
-| PHA, 2030s, 10 closest | 14.7 | 1.41 | **0.78** | 1,349 |
-| diameter >= 140 m, 2025-2035 | 38.4 | 2.41 | **1.43** | 9,599 |
-| H <= 18 and MOID <= 0.05, top 50 | 15.0 | 0.59 | 0.54 | 5,165 |
-| exact designation | 14.5 | 0.00097 | 0.00117 | 1 |
-| designation prefix '2020 ' | 27.8 | 0.69 | 0.69 | 6,666 |
-| APO, i >= 20, e >= 0.5, top 100 by a | 28.4 | 13.8 | **5.02** | 28,143 |
-| v >= 25 km/s and dist <= 0.01 au, top 20 | 26.6 | 0.29 | 0.22 | 759 |
-| one year (2028), not grazing | 28.2 | 0.50 | 0.35 | 2,409 |
+| PHA, 2030s, 10 closest | 14.3 | 1.42 | **0.84** | 1,349 |
+| diameter >= 140 m, 2025-2035 | 37.8 | 2.44 | **1.46** | 9,599 |
+| H <= 18 and MOID <= 0.05, top 50 | 14.6 | 0.55 | 0.53 | 5,165 |
+| exact designation | 18.3 | 0.0021 | 0.0025 | 1 |
+| designation prefix '2020 ' | 31.3 | 0.66 | 0.66 | 6,666 |
+| APO, i >= 20, e >= 0.5, top 100 by a | 31.5 | 14.3 | **5.61** | 28,143 |
+| v >= 25 km/s and dist <= 0.01 au, top 20 | 32.4 | 0.21 | 0.21 | 759 |
+| one year (2028), not grazing | 32.5 | 0.53 | 0.34 | 2,409 |
 
-**Memory** at 500k objects: all indexes **203 MiB** (425.8 bytes per object), built in 1.47 s; the master
+**Memory** at 500k objects: all indexes **203 MiB** (425.8 bytes per object), built in 1.37 s; the master
 vectors are 190.7 MiB (`sizeof(AsteroidRecord)` = 400 bytes) plus 57.2 MiB (`sizeof(CloseApproach)` = 120).
 The two designation / SPK-ID hash maps are 80 MiB of the 203.
 
-**Ingestion by page size** (20,000 objects, parsing only), ns per object: 100 -> 6,477; 500 -> 6,082;
-1,000 -> 6,035; 2,500 -> 6,203; 5,000 -> 6,693.
+**Ingestion by page size** (20,000 objects, parsing only), ns per object: 100 -> 6,065; 500 -> 6,151;
+1,000 -> 6,293; 2,500 -> 6,504; 5,000 -> 6,491.
 
 ### What the numbers say
 
-1. **The three hash maps are in one band** (16-32 ns at every size from 1k to 500k; the ranking between
-   them moves from size to size and is inside the run-to-run spread). The linear scan is 254,000 times
-   slower at 500k. What is robust is the **memory and build** difference: the record-index map is **5x
-   smaller** than the string-keyed `dsa::HashMap` (8.0 against 40.0 MiB at 500k) and builds **2.4x
-   faster** (no string copies), for a lookup that is at most about 20 % slower and not clearly slower at
-   all. Applied to both hash maps it would remove about 64 MiB of the 203 MiB of indexes at 500k, and
-   about 4 MiB of the ~15.5 MB on the real data (65,536 slots: 2.5 MiB each as `HashMap`, 0.5 MiB each as
-   `IndexedHashMap`; section 12). `dsa::HashMap` is kept
-   because lookup is not the cost that matters at 42k and it needs no master vector alive; the experiment
-   is the answer to the stage 5 question.
-2. **For a static dataset the sorted view beats the AVL tree on range queries, by a margin that grows with
-   size**: 2x at 1k approaches, about 50x at 100k, 47 to 109x at 500k (0.1 / 10 / 1 % selectivity: 47x /
-   106x / 109x). It also uses half the memory and about a quarter of the build time. At 1 % selectivity at 500k the AVL tree is 19x
-   faster than a linear scan but the sorted view is 2,100x faster; at 10 % the AVL tree is only 2x faster
-   than scanning. The AVL tree's reason to exist is **insert and delete** (it stays balanced; a sorted
-   array would shift O(n)). The query engine builds the dataset once and never mutates it, so the tree
-   earns nothing there beyond being the structure the project set out to implement and test. This is a
-   result to state in the report, not hide.
-3. **`dsa::topK` is 28 to 57 times faster than sorting everything to take the top k** (1.1 ms against
-   62-65 ms at k = 10, 2.2 ms against 63 ms at k = 1000); the gap narrows as k grows. **It is however
-   slower than `std::partial_sort` at every k (1.2 to 1.9x at 500k) and than `std::priority_queue` at
-   k = 100 and 1000 (1.4 to 1.6x); at k = 10 it ties the `priority_queue`.** The spread is narrow (e.g.
-   1.108-1.18 ms for `dsa::topK` at k = 10), so this is not noise. The cause was not investigated (the algorithm is the same one: a k-sized heap and a
-   one-comparison reject); a profile is the next step if it matters.
-4. **The planner's advantage depends on the query and grows with size.** At 500k it is 1.8x faster on
-   the PHA query and 2.7x on the APO query (it drives from the inclination view with 94k candidates where
-   the fixed order drives from the eccentricity view with 353k); where both choose the same driver they
-   tie. The APO query is faster planned at every size (6.9 against 10.4 us at 1k), but the PHA query is
-   **slower** planned at 1k and 10k (7.2 against 5.8 us, 14.2 against 12.0 us) and ahead only from 100k.
-   The planning step also shows on the cheapest query: the exact designation lookup is 20 % slower
-   planned (1.17 against 0.97 us at 500k). Against the naive scan the fixed order is 10x to 15,000x
-   faster on selective queries (the exact-designation lookup is the extreme) and only 2x on the
+1. **The hash maps are not in one band at 100k and above, and the ranking is stable.** At 500k: my
+   `dsa::HashMap` 16-18 ns, `dsa::IndexedHashMap` 21-23 ns, `std::unordered_map` 28-34 ns (spread within a
+   variant at most 7 % over four runs). My string-keyed map is about 1.3x faster than the record-index map
+   and about 1.8x faster than the standard library's. (An earlier version of this section called the three
+   "inside the run-to-run spread"; that was wrong, and the repeated runs show it.) At 1,000 to 10,000 objects
+   all three are within 12-23 ns and the order moves around. The record-index map's real advantage is memory
+   and build: **5x smaller** (8.0 against 40.0 MiB at 500k) and **2.4x faster to build**, for a lookup that
+   is about 30 % slower than the string-keyed map. Applied to both hash maps it would remove about 64 MiB of
+   the 203 MiB of indexes at 500k, and about 4 MiB of the ~15.5 MB on the real data (65,536 slots: 2.5 MiB
+   each as `HashMap`, 0.5 MiB each as `IndexedHashMap`; section 12). `dsa::HashMap` is kept: on the real data
+   the saving is small and lookup speed is not what limits a query; the experiment answers the stage 5
+   question.
+2. **The AVL tree: both halves are true, and the honest conclusion depends on the workload.**
+   *Queries:* for a static dataset the sorted view beats the AVL range walk by a margin that grows with size
+   (1.9x at 1k approaches, 43x at 100k, 90x at 500k), with half the memory and about a quarter of the build
+   time. *Mutation:* the AVL tree's O(log n) insert and erase are real; at 500k an insert costs 410 ns where
+   shifting a sorted array costs 97,500 ns (238x), and an erase 414 ns against 999,400 ns (2,400x, of which
+   some is the C library's slow overlapping copy). So the stage 5 rationale stands: **an AVL tree is the right
+   structure for single, unbatched updates on a large ordered index.** What it does not survive is a query
+   rate. Counting the array at its cheaper operation, the AVL tree is cheaper overall only below about **one
+   1 %-window range query per single mutation** (0.5 to 2.8 across sizes, 1.3 at 500k). And if updates can
+   be batched, merging a sorted batch into the array costs less per element than an AVL insert from batches
+   of about 1,000 (100k) to a few thousand (500k), after which the array wins on mutation as well as on
+   queries; a batch of 1,000 beats the AVL tree overall as soon as there is one query per 160 to 280
+   mutations. **For this project's workload, `neo.db` is loaded once and never mutated, so the AVL tree has
+   no mutation to earn its place with, and as the date index of the query engine it is the slower
+   structure.** A sorted view of the dates would make the engine's `DateTree` access path about 90x faster
+   per range, half the memory and a quarter of the build time at 500k. That swap has not been made; it is a
+   design decision (the AVL tree would stay as a tested dynamic index with no user), not a bug fix. The AVL
+   range walk itself is not tuned (it allocates a stack vector per call); that cannot close a 90x gap built
+   from a pointer chase per element, but it is part of it.
+3. **`dsa::topK` is on par with, and slightly ahead of, `std::partial_sort`** (0.564 against 0.647 ms at
+   k = 10, 1.291 against 1.351 ms at k = 1,000), and 50 to 117 times faster than sorting everything to take
+   the top k. The first version of this section reported it 1.2 to 1.9 times *slower* and called that
+   unexplained. It is explained now (details and the evidence in `docs/DSA_NOTES.md`): libstdc++'s
+   `partial_sort` is the same algorithm (a heap of k and one comparison per candidate), branch
+   mispredictions were identical, and the gap was the compiler inlining the loop into a large function where
+   it ran out of registers and kept its counter on the stack, plus an O(k^2) insertion sort for the final
+   ordering. Fixed by giving the loop a function of its own and ordering by popping the heap. The result is
+   GCC 13 on Linux; **MSVC has not been measured and may differ.**
+4. **The planner's advantage depends on the query and grows with size.** At 500k it is 1.7x faster than the
+   fixed order on the PHA query and 2.6x on the APO query (it drives from the inclination view with 94k
+   candidates where the fixed order drives from the eccentricity view with 353k); where both choose the
+   same driver they tie. The APO query is faster planned at every size (6.9 against 10.4 us at 1k), but the
+   PHA query is **slower** planned at 1k and 10k (7.0 against 5.8 us, 13.7 against 12.2 us) and ahead only
+   from 100k (102 against 147 us). The planning step also shows on the cheapest query: the exact
+   designation lookup is 23 % slower planned (2.5 against 2.1 us at 500k; microsecond figures are noisy on
+   this machine). Against the naive scan the fixed order is 10x to thousands of times faster on selective
+   queries (the exact-designation lookup is the extreme, 18 ms against 2 us) and only 2.2x on the
    unselective APO query, which the planner brings to 5.6x.
-5. **Parsing is not where ingestion time goes.** About 6 us per object at every page size (smaller pages
-   are slightly slower, 100 -> 6.5 us, 1,000 -> 6.0 us, and the largest slightly slower again, 5,000 ->
-   6.7 us), so parsing all 42,666 objects takes about 0.26 s, against the 172 s of the real run (74 s
-   network, 96 s politeness waiting, section 10). Page size is chosen by what the API tolerates, not by
-   parse cost.
+5. **Parsing is not where ingestion time goes.** About 6 to 6.5 us per object at every page size, with no
+   consistent trend (an earlier run had the smallest pages slightly slower, this one slightly faster), so
+   parsing all 42,666 objects takes about 0.27 s, against the 172 s of the real run (74 s network, 96 s
+   politeness waiting, section 10). Page size is chosen by what the API tolerates, not by parse cost.
 6. The index memory (203 MiB) is about the size of the master `records` vector (191 MiB), because a
    record is 400 bytes: an `Asteroid` holds six `std::string`s and seven `std::optional<double>`s. On the
    real data that is about 16 MiB of records (42,666 x 400 B) against the 15.5 MB of indexes in section 12.
@@ -1365,10 +1438,14 @@ The two designation / SPK-ID hash maps are 80 MiB of the 203.
 - **No run on the real `neo.db`.** The sandbox has no database and cannot reach JPL. The harness is ready
   for it (`neo_bench --db data/neo.db`); `neo_bench_tests` has a `[real]` pass that runs every experiment
   on it when the file exists and skips cleanly otherwise. The real 1k/10k/all rows and the resampled
-  100k/500k sets are produced only then.
+  100k/500k sets are produced only then; when they are, the synthetic 500k figures above stay alongside,
+  labelled, for the scaling story.
+- **No MSVC or Windows measurement of anything.** Every figure is GCC 13 on Linux. The top-K explanation
+  in particular is about what that compiler did with one loop.
 - **The SQL baseline** mentioned at the top of this plan (SQLite as a comparison in `neo_bench`) was not
   built. Exact lookup, range and top-K have no SQLite row.
 - **Ingestion by page size measures parsing only.** The network, the response cache and the politeness
   delay are not in it, because there is no network here and a delay would dominate everything.
 - Timings come from a shared container; they are for scaling and for comparing variants, not for quoting.
-- The `dsa::topK` slowness against the standard library (point 3) is measured, not explained.
+- The mutation experiment uses a uniform random key distribution and one range window size (1 %); a real
+  update stream (mostly recent dates) would hit the array's shift cost differently.

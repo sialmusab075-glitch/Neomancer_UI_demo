@@ -52,9 +52,16 @@ NEO FILTER, results table with checkboxes, PATHS/SWARM display) -> NEOS layer in
 the solar view (presets, worker-thread propagation, shared selection).
 
 ## Known open items
-- Stage 7 (neo_bench, NEO_PLAN section 16) is built and tested on synthetic data only. Still to do:
-  run `neo_bench --db data/neo.db` on the real database (the real rows are "not_run" until then),
-  and the optional SQLite baseline. IndexSet still uses dsa::HashMap; IndexedHashMap is the experiment.
+- Stage 7 (neo_bench, NEO_PLAN section 16) is built and tested, but ALL figures are synthetic data, GCC 13 on
+  Linux. Still to do on the Windows machine: build and run every suite with MSVC and GCC, run
+  `neo_bench --db data/neo.db` on the real database (real rows are "not_run" until then; keep the synthetic 500k
+  figures beside them, labelled), re-measure top-K under MSVC (the explanation in DSA_NOTES is about GCC code
+  generation), and run sat_ingest against live CelesTrak. Optional: SQLite baseline.
+- Open design decision: the engine's DateTree access path (an AVL tree) is ~90x slower per range than a sorted
+  view of the dates for a read-only index; see DSA_NOTES "AVL tree versus a sorted array". Not changed.
+- IndexSet still uses dsa::HashMap; IndexedHashMap is the experiment.
+- Hot loops in src/neo/dsa that run once per candidate get NEO_NOINLINE (neo/dsa/Inline.h); every timed
+  variant in neo_bench sits behind such a boundary.
 - Earth view has no legend/colour modes yet (the solar NEOS layer does).
 - Real mouse interaction (shift/ctrl clicks in the results table) was only tested
   through scripted clicks.

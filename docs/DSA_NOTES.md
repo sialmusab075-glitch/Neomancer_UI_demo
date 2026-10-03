@@ -241,7 +241,7 @@ array of doubles instead of jumping into 42,666 scattered 400-byte records.
 | `push` / `pop` | O(log n) |
 | `top` | O(1) |
 | `heapify` (build from an array) | **O(n)**, not O(n log n) |
-| `topK` over n candidates | O(n log k) time, O(k) space |
+| `topK` over n candidates | O(n log k) time, O(k) space (n comparisons, plus a sift for each candidate that beats the worst kept; then k pops to order the result, O(k log k)) |
 
 ### Why heapify is O(n)
 
@@ -563,20 +563,95 @@ structures are known to be *correct* before they are measured.
 
 ### What stage 7 found (synthetic data, sandbox; `docs/NEO_PLAN.md` section 16)
 
-Measured by `neo_bench` on generated datasets of 1k to 500k objects, not yet on the real catalogue.
+Measured by `neo_bench` on generated datasets of 1k to 500k objects, GCC 13 on Linux, not yet on the real
+catalogue and not at all under MSVC. The numbers and the caveats are in the plan; the points to be able to
+explain are these.
 
-- **Hash map.** My `HashMap`, `std::unordered_map` and the record-index `IndexedHashMap` all look up in
-  16 to 32 ns at every size; the differences are inside the run-to-run spread. What separates them is
-  memory and build time: the record-index map (8-byte slots, key not stored) is 5x smaller and builds
-  2.4x faster than the string-keyed one.
-- **Range queries on static data: a sorted array beats the AVL tree**, by about 50x at 100k and about
-  100x at 500k, at half the memory. The AVL tree's advantage is insertion and deletion, which this
-  workload never does. That is the answer to "why did you build an AVL tree": it was the structure the
-  project set out to implement and test, and the benchmark shows where it does not pay.
-- **Top-K.** The heap is 28 to 57x faster than sorting everything. My `topK` is 1.2 to 1.9x slower than
-  `std::partial_sort`, with the same algorithm; not yet explained.
-- **Planner.** Beats the fixed driver order by 1.8x to 2.7x at 500k on the queries where the two choose
+- **Hash map.** At 100k and above the ranking is stable and the differences are real (four runs, at most
+  7 % spread per variant): my string-keyed `HashMap` 16-18 ns, the record-index `IndexedHashMap` 21-23 ns,
+  `std::unordered_map` 28-34 ns at 500k. The record-index map pays about 30 % in lookup for being 5x
+  smaller and 2.4x faster to build. (An earlier draft called them all "inside the noise"; repeated runs
+  showed that was wrong.)
+- **The AVL tree is justified by mutation, not by queries**: see "AVL tree versus a sorted array" below.
+- **Top-K.** The heap is 50 to 117x faster than sorting everything and, after the fix below, on par with
+  `std::partial_sort`. An earlier version was 1.2 to 1.9x slower; that is explained in the next section.
+- **Planner.** Beats the fixed driver order by 1.7x to 2.6x at 500k on the queries where the two choose
   different drivers, ties where they agree, and costs more than it saves on the cheapest queries.
+
+### Why the heap looked slow (and the three guesses that were wrong)
+
+First `neo_bench` result: `dsa::topK` took 1.15 ms against 0.60 ms for `std::partial_sort` at k = 10 on
+500k candidates (1.9x), and was left as "unexplained". The explanation, with what was ruled out:
+
+1. **"std::partial_sort is an introselect / heapsort hybrid."** No. libstdc++ 13's `partial_sort` is
+   `__heap_select` then `__sort_heap` (`bits/stl_algo.h`): `make_heap` on the first k elements, then one
+   comparison of each remaining element against the top, a pop-and-push only when it wins, then a heap
+   sort of the k. That is exactly what `topK` does (introselect is `nth_element`, a different function).
+   Both do about n comparisons: a test in `neo_dsa_tests` counts them for `topK` (under 1.01 n for random
+   input).
+2. **"Branch prediction."** No. cachegrind on one binary, same data, the slow call and a verbatim
+   out-of-line copy of it: **0.23 M mispredicted branches each**. The "is it a better element?" branch is
+   almost never taken, in both.
+3. **"The comparator."** No. Variants with the wrapper comparator, with the plain comparator, with the
+   heap pre-filled before the loop and with the "not full yet" test inside it all ran at the speed of a
+   loop that does nothing but the comparisons (0.50 ms), in the same file.
+4. **What it was: code generation.** The *same source text*, copied verbatim into its own function, ran in
+   0.48 ms; the library `topK` as inlined into its caller ran in 1.2 ms. In the slow build the hot loop's
+   counter lives in memory (`addq $0x1,(%rsp)` followed by `mov (%rsp),%rax` every iteration) and the
+   candidate is stored to a stack slot each pass: the loop had been inlined, together with the vector
+   code, the heap sift and the caller, into one function that ran out of registers. cachegrind: 118 M
+   instructions and 23.6 M data reads in the slow loop against 107 M and 18.2 M in the fast one, which is
+   10 % and 30 % more and cannot explain 2.5x by volume. What does explain it is latency: every
+   iteration waits for a store-to-load forward of the counter, roughly 4-5 cycles, and 500k iterations
+   times about 4 cycles is about the 0.7 ms difference (assuming a clock near 3 GHz, which this sandbox does
+   not report). **That last step is an inference from the
+   arithmetic and the machine code, not a measurement**: this sandbox gives no cycle counters.
+   Making `topK` non-inlinable took it to 0.48 ms; making the loop its own tiny function
+   (`detail::selectBest`, `NEO_NOINLINE`, `neo/dsa/Inline.h`) keeps it there, with the final ordering and
+   the caller no longer sharing its registers.
+5. **A second, separate cost at large k.** The k results were ordered with an insertion sort, O(k^2),
+   although the comment above the function promised "k log k sift-downs": the code and its documented
+   complexity disagreed. At k = 1000 that was about 0.35 ms of a 2.3 ms call. It now pops the heap into
+   the result from the back, O(k log k) and no new code.
+
+After: `topK` 0.564 ms against `partial_sort` 0.647 ms at k = 10, 1.291 against 1.351 ms at k = 1,000.
+
+How fragile this is, and what is not known. In a small stand-alone program the inlined version was only
+about 20 % slower (0.57 against 0.47 ms), so the damage depends on how big the function it lands in is: the
+same code is fast or slow depending on its neighbours. That is why `neo_bench` now times every variant
+behind a no-inline boundary: otherwise which structure "wins" can be decided by register allocation. It is
+GCC 13 behaviour; **MSVC may inline differently, and has not been measured.** `NEO_NOINLINE` is
+`__declspec(noinline)` there. Re-run `neo_bench --only topk` on Windows before repeating any of this as a
+claim about the structure rather than the toolchain.
+
+### AVL tree versus a sorted array: what the 90x range-query loss left out
+
+The first stage 7 draft said "a sorted array beats the AVL tree, so the AVL tree does not pay". That
+compared only queries. The AVL tree exists for **mutation**, so `neo_bench` now measures that too
+(`NEO_PLAN.md` section 16, "Mutation"): single inserts and erases, a sorted array shifted on every mutation, a
+sorted batch merged in, a full rebuild, and the number of range queries per mutation at which they cost the
+same.
+
+- **The AVL tree's reason is real.** O(log n) insert/erase against O(n) shifting: at 500k approaches an
+  insert is 410 ns against 97,500 ns (238x) and an erase 414 ns against 999,400 ns (2,400x). At 1k
+  approaches the two are within a small factor (1.2x for insert): the advantage is a large-n advantage.
+  Part of the erase figure is the C library, not the structure: raw `memmove` of 250,000 doubles down by one
+  element took about 650 us against 65 us up by one, so the array's cheaper operation is used for the
+  headline break-even.
+- **It is paid for in queries.** Range walks are 1.9x slower at 1k, 43x at 100k, 90x at 500k than a binary
+  search on a sorted array (a pointer chase per element against a contiguous slice).
+- **The break-even is about one query per mutation.** Counting the array at its cheaper operation, the AVL
+  tree is cheaper overall only below 0.5 to 2.8 (1.3 at 500k) 1 %-window range queries per single mutation.
+- **Batching removes the argument.** Merging a sorted batch into the array costs less per element than an AVL
+  insert from batches of about 1,000 (100k) to a few thousand (500k), and a batch of 1,000 beats the AVL tree
+  overall once there is one query per 160 to 280 mutations.
+- **So: use an AVL tree for an ordered index that takes single, unbatched updates at large n with few queries
+  between them** (a live feed where every new object must be searchable at once, queried rarely). **Do not
+  use it for a read-only index, which is what `neo.db` is**: the engine's `DateTree` access path pays the 90x
+  query cost for mutation it never performs. Replacing it with a sorted view of the dates would be about 90x
+  faster per range, half the memory and a quarter of the build. That is a decision, not a fix, and has not
+  been made. The conclusion for the report is therefore two-sided: the stage 5 design rationale is correct
+  as a statement about the data structure and is not borne out by this application's workload.
 
 ---
 

@@ -12,6 +12,7 @@
 | nlohmann/json (single header) | 3.12.0 | MIT (`external/json/LICENSE.MIT`) | committed in `external/json/nlohmann/json.hpp` |
 | SQLite (amalgamation) | 3.53.4 (`3530400`, 2026) | public domain (dedication in the file header) | committed in `external/sqlite/sqlite3.c`, `sqlite3.h` |
 | stb_image (single header) | 2.30 (commit `013ac3b`) | MIT / public domain (dual, in the file footer) | committed in `external/stb/stb_image.h`; only the JPEG and PNG decoders are compiled (`STBI_ONLY_JPEG`, `STBI_ONLY_PNG`) |
+| sgp4 (Vallado reference SGP4, C++) | 2.27 (python-sgp4 commit `6e7428d`) | MIT, Copyright (c) Brandon Rhodes (`external/sgp4/LICENSE`); `SGP4.cpp`/`SGP4.h` are David Vallado's reference implementation as redistributed in that package | committed unmodified in `external/sgp4/`; built only into `solsim_sat` (satellites, visualization only) |
 | WinHTTP | Windows 10/11 SDK | Windows SDK licence (system component) | linked from the system (`winhttp`); no source vendored |
 
 ## Vendored downloads (verified)
@@ -25,7 +26,15 @@ Downloaded once and committed; the build never fetches them.
 | `external/sqlite/sqlite3.c`, `sqlite3.h` | `https://sqlite.org/2026/sqlite-amalgamation-3530400.zip` (2,946,650 B) | SHA3-256 `628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e` (sqlite.org download page) |
 
 | `external/stb/stb_image.h` | `https://raw.githubusercontent.com/nothings/stb/013ac3beddff3dbffafd5177e7972067cd2b5083/stb_image.h` | SHA-256 `594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3` (computed on download; the repository publishes no hashes) |
+| `external/sgp4/SGP4.cpp` (CRLF), `SGP4.h` (CRLF), `LICENSE` | `https://github.com/brandon-rhodes/python-sgp4` tag `2.27`, commit `6e7428df7acc48e8176828289a8c14486a114759`, paths `extension/SGP4.cpp`, `extension/SGP4.h`, `LICENSE`; byte-identical to the PyPI sdist `sgp4-2.27.tar.gz` | SHA-256 of the sdist `06d37247c6985739b707b8b39b6b83e06e8af783b2531e31965501ba983985f9` (matches PyPI's published digest). Files: `SGP4.cpp` `2ee7ad0e8f201e8251894083fe21e33a7aace2f43c871bf04357eb44a891b06e`, `SGP4.h` `2a5ec44e059a52b3173d78d9a28bda8142b4f6497c1eb16febc2cea4b5006b0c`, `LICENSE` `4474ea9eccbb829c6bc3652381bfe78b1c815de021d4a284a2a5b383a374d030` |
+| `tests/fixtures/sgp4/SGP4-VER.TLE`, `tcppver.out`, `sample_omm.json` | same commit, paths `sgp4/SGP4-VER.TLE`, `sgp4/tcppver.out`, `sample_omm.json` | see `tests/fixtures/sgp4/PROVENANCE.json` |
 | `assets/textures/earth_blue_marble_2048.jpg` (266,599 B, 2048x1024) | NASA Visible Earth, *The Blue Marble: Land Surface, Ocean Color and Sea Ice*, record 57730, `land_ocean_ice_2048.jpg` | SHA-256 `d4dc80a6...e6f1e` (computed on download). NASA imagery is not copyrighted (NASA media usage guidelines); credit: NASA Earth Observatory / Visible Earth. The exact credit line was not re-read from the source page. |
+
+**Licence of the sgp4 sources, stated precisely.** The package that was vendored (python-sgp4) is MIT-licensed
+(not public domain). Its C++ files are David Vallado's reference implementation (companion code to
+*Fundamentals of Astrodynamics and Applications*; Vallado, Crawford, Hujsak and Kelso, AIAA 2006-6753),
+whose headers carry no licence text of their own; they are redistributed under the package's MIT licence.
+Vallado's own terms (published with his software on CelesTrak) were not re-read for this entry.
 
 SQLite is compiled from the amalgamation by `cmake/Dependencies.cmake` with
 `SQLITE_THREADSAFE=2`, `SQLITE_DQS=0`, `SQLITE_OMIT_LOAD_EXTENSION`,
@@ -41,3 +50,8 @@ Object and encounter data come from NASA/JPL Solar System Dynamics / CNEOS web
 services (SBDB Query API, Close Approach Data API). The data is downloaded by
 `tools/neo_ingest` and cached locally; it is not redistributed in this
 repository beyond the small test fixtures in `tests/fixtures/`.
+
+Satellite element sets (visualization only, not part of the NEO data layer) come from CelesTrak's GP
+service (`https://celestrak.org/NORAD/elements/gp.php`), which republishes the US Space Force 18th Space
+Defense Squadron catalogue. They are downloaded by `tools/sat_ingest` and cached locally; they are not
+redistributed here beyond the OMM sample and the Vallado verification set in `tests/fixtures/sgp4/`. CelesTrak's usage terms were not re-read for this entry.

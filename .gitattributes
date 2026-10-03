@@ -1,2 +1,6 @@
 * text=auto
 *.ttf binary
+# Vendored sgp4 (Vallado reference code, CRLF in upstream) and its reference vectors: never normalised,
+# so the SHA-256 values in THIRD_PARTY.md hold on every checkout.
+external/sgp4/** -text
+tests/fixtures/sgp4/** -text

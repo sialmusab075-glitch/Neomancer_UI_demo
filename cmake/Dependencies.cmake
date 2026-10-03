@@ -48,6 +48,8 @@ FetchContent_MakeAvailable(glfw glm imgui implot)
 #
 #   nlohmann/json 3.12.0   external/json/nlohmann/json.hpp  (MIT)
 #   SQLite        3.53.4   external/sqlite/sqlite3.c/.h  (public domain)
+#   sgp4          2.27     external/sgp4/SGP4.cpp/.h  (David Vallado's reference SGP4 as shipped
+#                          in Brandon Rhodes' python-sgp4, MIT; used only by src/sat)
 #
 # Versions, sources and verified hashes are recorded in THIRD_PARTY.md. Both are
 # used only by the NEO data layer (src/neo), never by the renderer or the HUD.
@@ -122,3 +124,12 @@ target_compile_definitions(sqlite3 PUBLIC
     SQLITE_DEFAULT_MEMSTATUS=0
     SQLITE_DEFAULT_FOREIGN_KEYS=1)
 solsim_silence_target(sqlite3)
+
+# --- sgp4: Vallado's reference implementation, vendored unmodified -------------
+# python-sgp4 2.27, commit 6e7428df7acc48e8176828289a8c14486a114759 (see THIRD_PARTY.md).
+# Used only by the satellite library (src/sat). The code is the original C++ and is
+# built silenced: it is not ours to make warning-clean, and editing it would break the
+# claim that it is the reference.
+add_library(sgp4 STATIC ${PROJECT_SOURCE_DIR}/external/sgp4/SGP4.cpp)
+target_include_directories(sgp4 SYSTEM PUBLIC ${PROJECT_SOURCE_DIR}/external/sgp4)
+solsim_silence_target(sgp4)

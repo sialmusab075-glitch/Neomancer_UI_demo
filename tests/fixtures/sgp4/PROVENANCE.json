@@ -1,0 +1,31 @@
+{
+  "fixture_set": "sgp4 reference vectors and an OMM JSON sample",
+  "source_repository": "https://github.com/brandon-rhodes/python-sgp4",
+  "source_tag": "2.27",
+  "source_commit": "6e7428df7acc48e8176828289a8c14486a114759",
+  "also_in": "PyPI sdist sgp4-2.27.tar.gz, SHA-256 06d37247c6985739b707b8b39b6b83e06e8af783b2531e31965501ba983985f9 (SGP4-VER.TLE and tcppver.out were compared byte for byte with the repository files)",
+  "why": "SGP4-VER.TLE + tcppver.out are the verification set of Vallado, Crawford, Hujsak and Kelso (Revisiting Spacetrack Report #3, AIAA 2006-6753): 33 satellites, 700 reference lines, produced by the official C++ code. sample_omm.json is a one-record sample (VANGUARD 1, epoch 2025-02-14) in CelesTrak's GP/OMM JSON field layout, shipped by python-sgp4 (its README points to CelesTrak for the format; that the record was downloaded from CelesTrak is likely but is not stated upstream).",
+  "notes": [
+    "Five TLE lines in SGP4-VER.TLE (satellites 33333, 33334, 33335) have checksums that do not verify; this is how the file is published and is kept as is.",
+    "Line 2 of every satellite carries three extra fields after column 69 (start, stop, step in minutes from epoch) that are not part of a TLE.",
+    "Stored without line-ending normalisation (.gitattributes: -text)."
+  ],
+  "files": [
+    {
+      "file": "SGP4-VER.TLE",
+      "upstream_path": "sgp4/SGP4-VER.TLE",
+      "sha256": "d246d1d9d768ace445a38a965713fa9ba52d80fd8a41a0502ff83d7acffe2881"
+    },
+    {
+      "file": "tcppver.out",
+      "upstream_path": "sgp4/tcppver.out",
+      "sha256": "687bf28dbe52df86e8e60ab5cb4a08d1aa3dbcaf4e63b1f7ab95f044fbe3833b"
+    },
+    {
+      "file": "sample_omm.json",
+      "upstream_path": "sample_omm.json",
+      "sha256": "9b17bed3387a8ca1c4dca33cd1a288dffee499702f82571e4845a7cbe258a341"
+    }
+  ],
+  "fetched_utc": "2026-10-03"
+}

@@ -166,6 +166,32 @@ endif()
 solsim_set_warnings(neo_query)
 set_target_properties(neo_query PROPERTIES FOLDER "neo")
 
+# Benchmarks (stage 7). The harness is a small library so neo_bench and its tests share
+# one copy; nothing in the application or in solsim_neo links it.
+add_library(solsim_neo_bench STATIC
+    tools/neo_bench/Timing.h
+    tools/neo_bench/Recorder.h
+    tools/neo_bench/Recorder.cpp
+    tools/neo_bench/SyntheticData.h
+    tools/neo_bench/SyntheticData.cpp
+    tools/neo_bench/Experiments.h
+    tools/neo_bench/Experiments.cpp
+    tools/neo_bench/Summary.h
+    tools/neo_bench/Summary.cpp)
+target_include_directories(solsim_neo_bench PUBLIC tools/neo_bench)
+target_link_libraries(solsim_neo_bench PUBLIC solsim_neo)
+solsim_set_warnings(solsim_neo_bench)
+set_target_properties(solsim_neo_bench PROPERTIES FOLDER "neo")
+
+# neo_bench: reads neo.db only, no network. Writes bench-results/neo_bench.csv and a summary.
+add_executable(neo_bench tools/neo_bench/main.cpp)
+target_link_libraries(neo_bench PRIVATE solsim_neo_bench)
+if(MINGW)
+    target_link_options(neo_bench PRIVATE -static)
+endif()
+solsim_set_warnings(neo_bench)
+set_target_properties(neo_bench PROPERTIES FOLDER "neo")
+
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
@@ -416,4 +442,15 @@ if(SOLSIM_BUILD_TESTS)
     solsim_set_warnings(neo_swarm_tests)
     set_target_properties(neo_swarm_tests PROPERTIES FOLDER "neo")
     add_test(NAME neo_swarm_tests COMMAND neo_swarm_tests)
+
+    # Benchmark harness: timing helpers, the synthetic generator, the SBDB page writer, and
+    # every experiment on a small dataset (all variants must agree).
+    add_executable(neo_bench_tests tests/neo_bench_tests.cpp)
+    target_link_libraries(neo_bench_tests PRIVATE solsim_neo_bench)
+    if(MINGW)
+        target_link_options(neo_bench_tests PRIVATE -static)
+    endif()
+    solsim_set_warnings(neo_bench_tests)
+    set_target_properties(neo_bench_tests PROPERTIES FOLDER "neo")
+    add_test(NAME neo_bench_tests COMMAND neo_bench_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

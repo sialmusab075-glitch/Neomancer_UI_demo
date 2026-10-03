@@ -12,7 +12,7 @@ The graded part is the data + DSA + query layer (src/neo); the UI is secondary.
 Target toolchains: MSVC (primary) and GCC via WinLibs + Ninja.
   cmake -B build-gcc -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
   cmake --build build-gcc
-  ctest --test-dir build-gcc        # 9 suites, must all pass before every commit
+  ctest --test-dir build-gcc        # 10 suites, must all pass before every commit
 Must be warning-free under GCC -Wall -Wextra -Wpedantic and MSVC-clean by construction.
 If SolSystemSim.exe is locked (the app is running), never kill it: link a
 separate exe name for testing instead.
@@ -44,8 +44,9 @@ NEO FILTER, results table with checkboxes, PATHS/SWARM display) -> NEOS layer in
 the solar view (presets, worker-thread propagation, shared selection).
 
 ## Known open items
-- Stage 7 not started: neo_bench + CSV + results summary, including the experiment
-  of a HashMap keyed by record index (memory comparison).
+- Stage 7 (neo_bench, NEO_PLAN section 16) is built and tested on synthetic data only. Still to do:
+  run `neo_bench --db data/neo.db` on the real database (the real rows are "not_run" until then),
+  and the optional SQLite baseline. IndexSet still uses dsa::HashMap; IndexedHashMap is the experiment.
 - Earth view has no legend/colour modes yet (the solar NEOS layer does).
 - Real mouse interaction (shift/ctrl clicks in the results table) was only tested
   through scripted clicks.

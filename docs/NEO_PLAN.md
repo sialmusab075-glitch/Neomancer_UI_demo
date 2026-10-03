@@ -346,7 +346,7 @@ page size, and memory for the master vector and each index.
 | 4 | SQLite schema + save/load + tests | **done** (79 checks in `neo_storage_tests`) |
 | 5 | DSA structures + unit tests | **done** (133 checks in `neo_dsa_tests`; study notes in `docs/DSA_NOTES.md`) |
 | 6 | Query engine + planner + oracle tests | **done** (298 checks in `neo_query_tests`; 12,200 random queries, 0 mismatches) |
-| 7 | `neo_bench` + CSV + results summary | not started |
+| 7 | `neo_bench` + CSV + results summary | **done on synthetic data** (harness, 70 checks in `neo_bench_tests`, 10 new in `neo_dsa_tests`; **the run on the real `neo.db` has not been made**, see section 16) |
 | 8 | UI hook | **done**: Earth view (section 14) and the solar-view NEOS layer (section 15) |
 
 ### Stage 1 — decisions recorded
@@ -1183,3 +1183,192 @@ propagatable, one direct frame and one worker node timed, a real object equal to
 - Double-click to track an asteroid with the camera.
 - The Earth view has no legend / colour modes. (Its SWARM display exists, see section 14, but
   it does not use `SwarmLegend`.)
+
+
+## 16. Benchmarks (stage 7, implemented)
+
+`tools/neo_bench` writes `bench-results/neo_bench.csv` (git-ignored) and `neo_bench_summary.md`. The
+harness is a small static library, `solsim_neo_bench` (`tools/neo_bench/`), shared by the tool and
+`tests/neo_bench_tests.cpp`; nothing in `solsim_neo` or the application links it. The tool reads
+`neo.db` only: no network, no SQL.
+
+```
+neo_bench                       full run: 1k, 10k (cut from the real data), synthetic 100k and 500k, ingestion by page size
+neo_bench --quick               under a second, smoke run
+neo_bench --only lookup,topk    a subset (lookup, range, topk, query, memory, ingest)
+neo_bench --db PATH --out-dir DIR --repeats N --seed N --sizes A,B --synthetic A,B --no-real
+```
+
+### Method
+
+- `std::chrono::steady_clock`, one untimed warm-up, then **7 timed repeats (never fewer than 5)**; the
+  **median** is reported with min and max. A figure that costs tens of nanoseconds is timed over a
+  batch (2,000 lookups, 20 range windows) and divided, so the clock resolution does not decide it.
+- Every workload returns a checksum. **Variants of one experiment must return the same answer** or the
+  run records a failure and `neo_bench` exits 1: a timing of two variants that disagree means nothing.
+  The checksum is in the CSV `result` column, so the agreement is visible. (To prove the check bites, a
+  deliberate off-by-epsilon in the AVL range walk was injected once: the range experiment reported it on
+  every selectivity and the CSV check failed. The injected bug was then removed.)
+- Linear-scan variants stop after a budget of 20 million element visits per repeat, so they run fewer
+  operations at large n (the row says how many); figures are per operation either way.
+- Every CSV row carries its **dataset and dataset kind** (`real`, `synthetic-resampled`,
+  `synthetic-parametric`). A figure that was supposed to exist and does not (no `neo.db`) is a row with
+  status `not_run` and the reason, never an absent or invented number.
+
+### Datasets
+
+| Dataset | Kind | How it is made |
+|---|---|---|
+| `real`, `real-first-1000`, `real-first-10000` | real | `data/neo.db`, or its first N objects with their approaches |
+| `synthetic-100000`, `synthetic-500000` | synthetic-resampled | each object is a copy of a randomly chosen **real** object (so every field distribution and correlation is the real one) with a fresh designation; its approaches copied with the date moved by up to +-3 years |
+| `synthetic-1000`, ... when there is no `neo.db` | synthetic-parametric | fixed distributions in `tools/neo_bench/SyntheticData.cpp`: H ~ N(22.5, 2.3), q uniform 0.2..1.3 au, a lognormal around 1.9 au, i exponential (mean 12 deg), MOID 0.3u^2, 6 % PHA, 3 % measured diameter, 46 % of objects with 1 + geometric approaches, distance 0.05*sqrt(u) au, v_rel lognormal (median 9.5 km/s) |
+
+The parametric generator is an **approximation of the SBDB population** (the real catalogue has 42,666
+objects and 42,819 approaches; the 1k/10k/100k/500k parametric sets have 1.07 / 1.00 / 1.00 / 1.00
+approaches per object, matching it). It exists so the harness runs anywhere. The page writer
+(`makeSbdbPageJson`) round-trips through the real `parseSbdbObjects`, so the generated objects are also
+a test of the generator.
+
+### Experiments
+
+| Experiment | Contenders | Verified against |
+|---|---|---|
+| exact lookup | linear scan, `dsa::HashMap<string,uint32>`, `std::unordered_map`, **`dsa::IndexedHashMap`** (record-index map) | `std::unordered_map` |
+| range (approach date, 0.1 / 1 / 10 % selectivity) | linear scan of the dense column, sorted view + binary search, AVL range walk | the linear scan (count and sum of indices per window) |
+| top-K (approach distance, K = 10 / 100 / 1000) | `std::sort`, `dsa::mergeSort`, `std::partial_sort`, `dsa::topK` (heap), `std::priority_queue` | `std::sort` (ties broken by index, one right answer) |
+| combined query (8 queries) | naive scan, fixed driver order, statistics-driven planner | the naive scan |
+| index build and memory | every index, the master vectors | n/a |
+| ingestion by page size | `parseSbdbObjects` over pages of 100..5000 | all generated rows accepted, none rejected |
+
+#### The record-index HashMap experiment
+
+`dsa::IndexedHashMap` (`src/neo/dsa/IndexedHashMap.h`, 10 checks including a 200k-operation fuzz against
+`std::unordered_map`) is the same Robin Hood table, but a slot is **8 bytes: a record index plus a packed
+(24-bit distance, 8-bit hash tag)**; the key is not stored, and a lookup compares against
+`records[slot.record].object.pdes`. The tag is what keeps lookups fast: a probe touches the master vector
+(a likely cache miss) only when the 8-bit tag matches, so a failed probe costs about 1/256 of an
+indirection. The costs: one extra memory access per key comparison that passes the tag, a rehash that
+reads every key, and a map that is valid only while the master vector is unchanged. **It is an
+experiment: `IndexSet` still uses `dsa::HashMap`.**
+
+### Results (sandbox, **synthetic**, not the real catalogue)
+
+Measured in the cloud sandbox: Linux x86-64, GCC 13.3, `-O3 -DNDEBUG`, a shared 4-vCPU container, seed 42,
+7 repeats, all four datasets `synthetic-parametric` (no `neo.db` there). **These numbers show how the
+structures scale and compare; they are not the figures for the report.** Re-run `neo_bench` on the target
+machine with the real `neo.db` for those (the Intel UHD Windows machine the frame rates in sections 14 and
+15 come from). On shared hardware the spread is visible (min and max are in the CSV): differences under
+about 20 % between two variants are inside it.
+
+**Exact lookup**, ns per lookup (75 % present designations):
+
+| n objects | linear scan | `dsa::HashMap` | `std::unordered_map` | `dsa::IndexedHashMap` |
+|---:|---:|---:|---:|---:|
+| 1,000 | 1,176 | 17.4 | 19.4 | 16.0 |
+| 10,000 | 15,340 | 26.5 | 32.0 | 27.0 |
+| 100,000 | 344,900 | 20.2 | 21.5 | 21.2 |
+| 500,000 | 5,293,000 | 20.8 | 26.9 | 24.2 |
+
+| n objects | table memory: `HashMap` | `IndexedHashMap` | `unordered_map` (estimate) | build ms: `HashMap` | `unordered_map` | `IndexedHashMap` |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100,000 | 10.0 MiB | **2.0 MiB** | 6.9 MiB | 17.2 | 22.2 | **8.7** |
+| 500,000 | 40.0 MiB | **8.0 MiB** | 34.5 MiB | 105 | 202 | **44.3** |
+
+**Range**, approach date, 1 % selectivity (4,998 approaches per window at 500k), ns per window:
+
+| n approaches | linear scan | sorted view + binary search | AVL range walk |
+|---:|---:|---:|---:|
+| 1,070 | 2,398 | 30.8 | 64.1 |
+| 9,981 | 35,200 | 56.8 | 537 |
+| 100,098 | 392,700 | 241.6 | 12,200 |
+| 499,768 | 1,852,000 | 883 | 96,340 |
+
+At 500k: 0.1 % selectivity is 141 ns (sorted view) against 6.6 us (AVL) against 1.64 ms (linear); 10 %
+is 9.4 us against 995 us against 2.03 ms. Build at 500k: sorted view 68.5 ms and 5.7 MiB, AVL 261 ms and
+11.4 MiB.
+
+**Top-K** of 499,768 approaches by distance, ms:
+
+| k | `std::sort` (full) | `dsa::mergeSort` (full) | `std::partial_sort` | `dsa::topK` | `std::priority_queue` |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 65.4 | 61.9 | 0.60 | 1.15 | 1.19 |
+| 100 | 65.1 | 62.1 | 1.17 | 1.38 | 0.87 |
+| 1000 | 62.7 | 63.0 | 1.47 | 2.22 | 1.57 |
+
+**Combined queries**, ms, 500,000 objects / 499,768 approaches (the planner's chosen driver in the note
+column of the CSV):
+
+| Query | naive | fixed order | planned | matched |
+|---|---:|---:|---:|---:|
+| PHA, 2030s, 10 closest | 14.7 | 1.41 | **0.78** | 1,349 |
+| diameter >= 140 m, 2025-2035 | 38.4 | 2.41 | **1.43** | 9,599 |
+| H <= 18 and MOID <= 0.05, top 50 | 15.0 | 0.59 | 0.54 | 5,165 |
+| exact designation | 14.5 | 0.00097 | 0.00117 | 1 |
+| designation prefix '2020 ' | 27.8 | 0.69 | 0.69 | 6,666 |
+| APO, i >= 20, e >= 0.5, top 100 by a | 28.4 | 13.8 | **5.02** | 28,143 |
+| v >= 25 km/s and dist <= 0.01 au, top 20 | 26.6 | 0.29 | 0.22 | 759 |
+| one year (2028), not grazing | 28.2 | 0.50 | 0.35 | 2,409 |
+
+**Memory** at 500k objects: all indexes **203 MiB** (425.8 bytes per object), built in 1.47 s; the master
+vectors are 190.7 MiB (`sizeof(AsteroidRecord)` = 400 bytes) plus 57.2 MiB (`sizeof(CloseApproach)` = 120).
+The two designation / SPK-ID hash maps are 80 MiB of the 203.
+
+**Ingestion by page size** (20,000 objects, parsing only), ns per object: 100 -> 6,477; 500 -> 6,082;
+1,000 -> 6,035; 2,500 -> 6,203; 5,000 -> 6,693.
+
+### What the numbers say
+
+1. **The three hash maps are in one band** (16-32 ns at every size from 1k to 500k; the ranking between
+   them moves from size to size and is inside the run-to-run spread). The linear scan is 254,000 times
+   slower at 500k. What is robust is the **memory and build** difference: the record-index map is **5x
+   smaller** than the string-keyed `dsa::HashMap` (8.0 against 40.0 MiB at 500k) and builds **2.4x
+   faster** (no string copies), for a lookup that is at most about 20 % slower and not clearly slower at
+   all. Applied to both hash maps it would remove about 64 MiB of the 203 MiB of indexes at 500k, and
+   about 4 MiB of the ~15.5 MB on the real data (65,536 slots: 2.5 MiB each as `HashMap`, 0.5 MiB each as
+   `IndexedHashMap`; section 12). `dsa::HashMap` is kept
+   because lookup is not the cost that matters at 42k and it needs no master vector alive; the experiment
+   is the answer to the stage 5 question.
+2. **For a static dataset the sorted view beats the AVL tree on range queries, by a margin that grows with
+   size**: 2x at 1k approaches, about 50x at 100k, 47 to 109x at 500k (0.1 / 10 / 1 % selectivity: 47x /
+   106x / 109x). It also uses half the memory and about a quarter of the build time. At 1 % selectivity at 500k the AVL tree is 19x
+   faster than a linear scan but the sorted view is 2,100x faster; at 10 % the AVL tree is only 2x faster
+   than scanning. The AVL tree's reason to exist is **insert and delete** (it stays balanced; a sorted
+   array would shift O(n)). The query engine builds the dataset once and never mutates it, so the tree
+   earns nothing there beyond being the structure the project set out to implement and test. This is a
+   result to state in the report, not hide.
+3. **`dsa::topK` is 28 to 57 times faster than sorting everything to take the top k** (1.1 ms against
+   62-65 ms at k = 10, 2.2 ms against 63 ms at k = 1000); the gap narrows as k grows. **It is however
+   slower than `std::partial_sort` at every k (1.2 to 1.9x at 500k) and than `std::priority_queue` at
+   k = 100 and 1000 (1.4 to 1.6x); at k = 10 it ties the `priority_queue`.** The spread is narrow (e.g.
+   1.108-1.18 ms for `dsa::topK` at k = 10), so this is not noise. The cause was not investigated (the algorithm is the same one: a k-sized heap and a
+   one-comparison reject); a profile is the next step if it matters.
+4. **The planner's advantage depends on the query and grows with size.** At 500k it is 1.8x faster on
+   the PHA query and 2.7x on the APO query (it drives from the inclination view with 94k candidates where
+   the fixed order drives from the eccentricity view with 353k); where both choose the same driver they
+   tie. The APO query is faster planned at every size (6.9 against 10.4 us at 1k), but the PHA query is
+   **slower** planned at 1k and 10k (7.2 against 5.8 us, 14.2 against 12.0 us) and ahead only from 100k.
+   The planning step also shows on the cheapest query: the exact designation lookup is 20 % slower
+   planned (1.17 against 0.97 us at 500k). Against the naive scan the fixed order is 10x to 15,000x
+   faster on selective queries (the exact-designation lookup is the extreme) and only 2x on the
+   unselective APO query, which the planner brings to 5.6x.
+5. **Parsing is not where ingestion time goes.** About 6 us per object at every page size (smaller pages
+   are slightly slower, 100 -> 6.5 us, 1,000 -> 6.0 us, and the largest slightly slower again, 5,000 ->
+   6.7 us), so parsing all 42,666 objects takes about 0.26 s, against the 172 s of the real run (74 s
+   network, 96 s politeness waiting, section 10). Page size is chosen by what the API tolerates, not by
+   parse cost.
+6. The index memory (203 MiB) is about the size of the master `records` vector (191 MiB), because a
+   record is 400 bytes: an `Asteroid` holds six `std::string`s and seven `std::optional<double>`s. On the
+   real data that is about 16 MiB of records (42,666 x 400 B) against the 15.5 MB of indexes in section 12.
+
+### Not done
+
+- **No run on the real `neo.db`.** The sandbox has no database and cannot reach JPL. The harness is ready
+  for it (`neo_bench --db data/neo.db`); `neo_bench_tests` has a `[real]` pass that runs every experiment
+  on it when the file exists and skips cleanly otherwise. The real 1k/10k/all rows and the resampled
+  100k/500k sets are produced only then.
+- **The SQL baseline** mentioned at the top of this plan (SQLite as a comparison in `neo_bench`) was not
+  built. Exact lookup, range and top-K have no SQLite row.
+- **Ingestion by page size measures parsing only.** The network, the response cache and the politeness
+  delay are not in it, because there is no network here and a delay would dominate everything.
+- Timings come from a shared container; they are for scaling and for comparing variants, not for quoting.
+- The `dsa::topK` slowness against the standard library (point 3) is measured, not explained.

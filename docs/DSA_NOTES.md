@@ -547,7 +547,7 @@ determined orbits far from their epoch, whose uncertainty ellipse merely reaches
 the Earth; 37 of the 65 are in the past. Flagging on `dist_min` would raise 65
 false alarms, which is why the flag uses the nominal distance.
 
-## 7. What each structure replaces, and what stage 7 will compare
+## 7. What each structure replaces, and what stage 7 compared
 
 | Mine | `std::` equivalent | The experiment |
 |---|---|---|
@@ -560,6 +560,23 @@ false alarms, which is why the flag uses the nominal distance.
 All five are already driven side by side with those `std::` containers in the
 differential tests, which is what makes the stage 7 comparison meaningful: the
 structures are known to be *correct* before they are measured.
+
+### What stage 7 found (synthetic data, sandbox; `docs/NEO_PLAN.md` section 16)
+
+Measured by `neo_bench` on generated datasets of 1k to 500k objects, not yet on the real catalogue.
+
+- **Hash map.** My `HashMap`, `std::unordered_map` and the record-index `IndexedHashMap` all look up in
+  16 to 32 ns at every size; the differences are inside the run-to-run spread. What separates them is
+  memory and build time: the record-index map (8-byte slots, key not stored) is 5x smaller and builds
+  2.4x faster than the string-keyed one.
+- **Range queries on static data: a sorted array beats the AVL tree**, by about 50x at 100k and about
+  100x at 500k, at half the memory. The AVL tree's advantage is insertion and deletion, which this
+  workload never does. That is the answer to "why did you build an AVL tree": it was the structure the
+  project set out to implement and test, and the benchmark shows where it does not pay.
+- **Top-K.** The heap is 28 to 57x faster than sorting everything. My `topK` is 1.2 to 1.9x slower than
+  `std::partial_sort`, with the same algorithm; not yet explained.
+- **Planner.** Beats the fixed driver order by 1.8x to 2.7x at 500k on the queries where the two choose
+  different drivers, ties where they agree, and costs more than it saves on the cheapest queries.
 
 ---
 

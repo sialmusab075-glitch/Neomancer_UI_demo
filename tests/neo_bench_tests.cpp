@@ -338,6 +338,7 @@ std::size_t countRows(const neo::bench::Recorder& rec, const std::string& experi
 void runAll(const neo::bench::DatasetUnderTest& data, const neo::bench::ExperimentConfig& config, neo::bench::Recorder& rec) {
     neo::bench::runLookupExperiment(data, config, rec);
     neo::bench::runRangeExperiment(data, config, rec);
+    neo::bench::runMutationExperiment(data, config, rec);
     neo::bench::runTopKExperiment(data, config, rec);
     neo::bench::runQueryExperiment(data, config, rec);
     neo::bench::runMemoryExperiments(data, config, rec);
@@ -352,7 +353,8 @@ void checkRows(const neo::bench::Recorder& rec, const char* label) {
         labelled = labelled && !r.dataset.empty() && !r.datasetKind.empty() && !r.variant.empty() && !r.unit.empty();
         timed = timed && r.median >= 0.0 && std::isfinite(r.median);
         ordered = ordered && r.min <= r.median + 1e-9 && r.median <= r.max + 1e-9;
-        if (r.unit != "bytes") {
+        // sizes and derived break-even points are not timings
+        if (r.unit != "bytes" && r.experiment != "mutation_breakeven") {
             repeatsOk = repeatsOk && r.repeats >= 5;
         }
     }
@@ -386,6 +388,9 @@ void testExperiments() {
     check(countRows(rec, "lookup_build") == 3 && countRows(rec, "lookup_memory") == 3, "lookup: three builds, three memory figures");
     check(countRows(rec, "range") == 9, "range: 3 selectivities x 3 variants", std::to_string(countRows(rec, "range")));
     check(countRows(rec, "range_build") == 2 && countRows(rec, "range_memory") == 3, "range: build and memory rows");
+    check(countRows(rec, "mutation") == 12 && countRows(rec, "mutation_breakeven") == 3,
+          "mutation: 4 per-mutation costs, a rebuild, 5 batch merges, 2 queries; and 3 break-even rows",
+          std::to_string(countRows(rec, "mutation")) + "/" + std::to_string(countRows(rec, "mutation_breakeven")));
     check(countRows(rec, "topk") == 15, "topk: 3 values of k x 5 variants", std::to_string(countRows(rec, "topk")));
     check(countRows(rec, "query") == 24, "query: 8 queries x 3 execution modes", std::to_string(countRows(rec, "query")));
     check(countRows(rec, "index_build") > 10 && countRows(rec, "index_memory") > 10, "memory: every index has a build time and a size");
@@ -410,6 +415,18 @@ void testExperiments() {
         }
     }
     check(equalWithinGroup && !firstResult.empty(), "variants of one group carry the same result checksum in the CSV");
+
+    // mutation rows: every figure positive and finite, break-even rows say what they mean
+    bool mutationSane = true, breakevenNamed = true;
+    for (const neo::bench::BenchRow& r : rec.rows()) {
+        if (r.experiment == "mutation") {
+            mutationSane = mutationSane && r.median > 0.0 && std::isfinite(r.median) && r.unit == "ns/op";
+        }
+        if (r.experiment == "mutation_breakeven") {
+            breakevenNamed = breakevenNamed && r.unit == "range queries per mutation" && !r.note.empty() && r.median >= 0.0;
+        }
+    }
+    check(mutationSane && breakevenNamed, "mutation figures are positive and finite; break-even rows carry their unit and explanation");
 
     // memory: the indexed map really is smaller than the string-keyed one
     double classicBytes = 0, indexedBytes = 0;

@@ -49,6 +49,12 @@ void runLookupExperiment(const DatasetUnderTest& data, const ExperimentConfig& c
 // search, AVL tree; build time, query time, memory.
 void runRangeExperiment(const DatasetUnderTest& data, const ExperimentConfig& config, Recorder& out);
 
+// mutation: what the AVL tree is FOR. Insert and erase cost on the AVL tree against keeping a sorted array
+// current (shifting on each insert/erase; merging a batch; rebuilding it all), then the number of range
+// queries per mutation at which the two structures cost the same overall. The range experiment alone
+// shows only the query half of the trade.
+void runMutationExperiment(const DatasetUnderTest& data, const ExperimentConfig& config, Recorder& out);
+
 // top-K by approach distance, K = 10, 100, 1000: std::sort, dsa::mergeSort, std::partial_sort,
 // dsa::topK (heap), std::priority_queue.
 void runTopKExperiment(const DatasetUnderTest& data, const ExperimentConfig& config, Recorder& out);

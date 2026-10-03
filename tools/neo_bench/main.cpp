@@ -45,7 +45,7 @@ void printUsage() {
         "  --synthetic A,B         generated sizes (default 100000,500000); resampled from the real data when present\n"
         "  --repeats N             timed repeats per figure, at least 5 (default 7)\n"
         "  --seed N                seed of every generator (default 42)\n"
-        "  --only LIST             comma list of: lookup, range, topk, query, memory, ingest (default all)\n"
+        "  --only LIST             comma list of: lookup, range, mutation, topk, query, memory, ingest (default all)\n"
         "  --ingest-objects N      objects in the ingestion-by-page-size experiment (default 20000)\n"
         "  --page-sizes A,B,C      page sizes of that experiment (default 100,500,1000,2500,5000)\n"
         "  --no-real               ignore the real database even if it exists\n"
@@ -294,6 +294,7 @@ int main(int argc, char** argv) {
         };
         run("lookup", neo::bench::runLookupExperiment);
         run("range", neo::bench::runRangeExperiment);
+        run("mutation", neo::bench::runMutationExperiment);
         run("topk", neo::bench::runTopKExperiment);
         run("query", neo::bench::runQueryExperiment);
         run("memory", neo::bench::runMemoryExperiments);

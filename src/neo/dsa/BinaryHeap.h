@@ -1,5 +1,6 @@
 #pragma once
 
+#include "neo/dsa/Inline.h"
 #include "neo/dsa/Instrumentation.h"
 
 #include <cstddef>
@@ -168,6 +169,43 @@ private:
 //
 // O(n log k) time, O(k) space. The result is fully ordered best-first, which
 // costs the final k log k sift-downs.
+namespace detail {
+
+// The heap's comparator for top-K. The heap is a max-heap under its comparator, and the maximum under
+// "ranks above" is the element that ranks LAST: the worst of the current best k, and so the one a new
+// candidate has to beat. Counts its own comparisons (the heap itself uses the null policy).
+template <class Better, class Counters>
+struct WorstOnTop {
+    const Better* better;
+    Counters*     counters;
+    bool operator()(std::uint32_t a, std::uint32_t b) const {
+        counters->comparison();
+        return (*better)(a, b);
+    }
+};
+
+// The streaming pass: one comparison per candidate against the worst kept element, a sift only when a
+// candidate beats it. It is a function of its own, and NEO_NOINLINE, so that nothing else shares its
+// register allocation: with the final ordering or the caller's code in the same function the compiler
+// spilled the loop counter to the stack and the loop ran 2.5 times slower (docs/DSA_NOTES.md).
+template <class Better, class Counters>
+NEO_NOINLINE void selectBest(const std::uint32_t* candidates, std::size_t count, std::size_t k, const Better& better,
+                             Counters& counters, BinaryHeap<std::uint32_t, WorstOnTop<Better, Counters>>& heap) {
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::uint32_t candidate = candidates[i];
+        if (heap.size() < k) {
+            heap.push(candidate);
+            continue;
+        }
+        counters.comparison();
+        if (better(candidate, heap.top())) {
+            heap.replaceTop(candidate);
+        }
+    }
+}
+
+} // namespace detail
+
 template <class Better, class Counters = NullCounters>
 std::vector<std::uint32_t> topK(const std::uint32_t* candidates, std::size_t count, std::size_t k,
                                 const Better& better, Counters& counters) {
@@ -175,48 +213,17 @@ std::vector<std::uint32_t> topK(const std::uint32_t* candidates, std::size_t cou
     if (k == 0 || count == 0) {
         return result;
     }
-    // The heap is a max-heap under its comparator, and the maximum under
-    // "ranks above" is the element that ranks LAST. Feeding it `better`
-    // directly therefore puts the worst of the current best k on top, which is
-    // the one a new candidate has to beat.
-    const auto worstOnTop = [&better, &counters](std::uint32_t a, std::uint32_t b) {
-        counters.comparison();
-        return better(a, b);
-    };
-    // The comparator already counts its own comparisons, so the heap itself
-    // uses the null policy (a reference cannot be a base class).
-    BinaryHeap<std::uint32_t, decltype(worstOnTop)> heap(worstOnTop);
+    BinaryHeap<std::uint32_t, detail::WorstOnTop<Better, Counters>> heap(detail::WorstOnTop<Better, Counters>{&better, &counters});
     heap.reserve(k < count ? k : count);
+    detail::selectBest(candidates, count, k, better, counters, heap);
 
-    for (std::size_t i = 0; i < count; ++i) {
-        const std::uint32_t candidate = candidates[i];
-        if (heap.size() < k) {
-            heap.push(candidate);
-            continue;
-        }
-        // One comparison against the worst kept element rejects most candidates.
-        counters.comparison();
-        if (better(candidate, heap.top())) {
-            heap.replaceTop(candidate);
-        }
-    }
-
-    result = heap.release();
-    // A heap is not a sorted array, so the k survivors are ordered best-first
-    // here. Insertion sort suits it: k is small (typically 10-50), and it keeps
-    // this file independent of the sort module.
-    for (std::size_t i = 1; i < result.size(); ++i) {
-        const std::uint32_t value = result[i];
-        std::size_t j = i;
-        while (j > 0) {
-            counters.comparison();
-            if (!better(value, result[j - 1])) {
-                break;
-            }
-            result[j] = result[j - 1];
-            --j;
-        }
-        result[j] = value;
+    // A heap is not a sorted array. Popping it yields the worst of the k first, so the result is filled from
+    // the back: best-first, k pops of O(log k) each. (This used to be an insertion sort, O(k^2): fine for
+    // k = 10, 0.35 ms of the 2.3 ms at k = 1000 on 500k candidates.)
+    result.resize(heap.size());
+    for (std::size_t i = result.size(); i > 0; --i) {
+        result[i - 1] = heap.top();
+        heap.pop();
     }
     return result;
 }

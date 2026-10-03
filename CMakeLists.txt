@@ -85,7 +85,9 @@ add_library(solsim_neo STATIC
     src/neo/storage/Database.h
     src/neo/storage/Database.cpp
     src/neo/dsa/Instrumentation.h
+    src/neo/dsa/Inline.h
     src/neo/dsa/HashMap.h
+    src/neo/dsa/IndexedHashMap.h
     src/neo/dsa/Sort.h
     src/neo/dsa/BinaryHeap.h
     src/neo/dsa/AvlTree.h

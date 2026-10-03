@@ -535,6 +535,61 @@ void testHeapFuzz() {
         topKAgreed = mineTop == expected;
     }
     check(topKAgreed, "top-K matches std::partial_sort over 40 random rounds");
+
+    // The final ordering pops the heap: check it at the sizes where it matters, with ties, and that it is
+    // strictly best-first.
+    {
+        Rng edge(0x70B5u);
+        const std::size_t n = 5000;
+        std::vector<double> keys(n);
+        for (double& key : keys) {
+            key = static_cast<double>(edge.below(50));
+        }
+        std::vector<std::uint32_t> all(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            all[i] = static_cast<std::uint32_t>(i);
+        }
+        const auto better = [&keys](std::uint32_t a, std::uint32_t b) {
+            if (keys[a] != keys[b]) {
+                return keys[a] < keys[b];
+            }
+            return a < b;
+        };
+        std::vector<std::uint32_t> sorted = all;
+        std::sort(sorted.begin(), sorted.end(), better);
+        bool edgesOk = true;
+        for (const std::size_t k : {std::size_t(1), std::size_t(2), std::size_t(17), std::size_t(999), std::size_t(1000), std::size_t(4999), n, n + 5}) {
+            const std::vector<std::uint32_t> mine = neo::dsa::topK(all, k, better);
+            const std::size_t expectedSize = k < n ? k : n;
+            bool same = mine.size() == expectedSize;
+            for (std::size_t i = 0; i < mine.size() && same; ++i) {
+                same = mine[i] == sorted[i];
+            }
+            edgesOk = edgesOk && same;
+        }
+        check(edgesOk, "top-K equals the first k of a full sort for k = 1, 2, 17, 999, 1000, n-1, n and past n (heavy ties)");
+    }
+
+    // The documented cost is one comparison per candidate plus occasional replacements: for candidates in
+    // random order and small k, close to n comparisons, not n log k.
+    {
+        Rng order(0xC0057u);
+        const std::size_t n = 100000;
+        std::vector<double> keys(n);
+        for (double& key : keys) {
+            key = order.unit();
+        }
+        std::vector<std::uint32_t> all(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            all[i] = static_cast<std::uint32_t>(i);
+        }
+        const auto better = [&keys](std::uint32_t a, std::uint32_t b) { return keys[a] < keys[b]; };
+        neo::dsa::LiveCounters counters;
+        const std::vector<std::uint32_t> top = neo::dsa::topK(all.data(), n, 10, better, counters);
+        check(top.size() == 10, "ten results from a hundred thousand candidates");
+        check(counters.comparisons >= n - 10 && counters.comparisons < n + n / 100,
+              "and about one comparison per candidate (between n-10 and 1.01 n), not n log k", std::to_string(counters.comparisons));
+    }
 }
 
 // --- AVL -------------------------------------------------------------------
